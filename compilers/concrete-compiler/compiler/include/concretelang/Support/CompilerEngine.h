@@ -133,6 +133,7 @@ struct CompilationOptions {
     switch (backend) {
     case Backend::CPU:
       loopParallelize = true;
+      dataflowParallelize = true;
       break;
     case Backend::GPU:
       batchTFHEOps = true;
