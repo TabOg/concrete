@@ -564,6 +564,9 @@ mlir::LogicalResult lowerToStd(mlir::MLIRContext &context,
       pm, mlir::bufferization::createBufferDeallocationPass(), enablePass);
   addPotentiallyNestedPass(pm, mlir::concretelang::createStartStopPass(),
                            enablePass);
+  addPotentiallyNestedPass(pm, mlir::createCanonicalizerPass(), enablePass);
+  addPotentiallyNestedPass(pm, mlir::createBufferizationToMemRefPass(),
+                           enablePass);
   addPotentiallyNestedPass(
       pm, mlir::concretelang::createFixupBufferDeallocationPass(), enablePass);
 
@@ -592,9 +595,13 @@ lowerStdToLLVMDialect(mlir::MLIRContext &context, mlir::ModuleOp &module,
   pipelinePrinting("StdToLLVM", pm, context);
 
   // Convert to MLIR LLVM Dialect
+  addPotentiallyNestedPass(pm, mlir::arith::createArithExpandOpsPass(),
+                           enablePass);
   addPotentiallyNestedPass(
       pm, mlir::concretelang::createConvertMLIRLowerableDialectsToLLVMPass(),
       enablePass);
+  addPotentiallyNestedPass(pm, mlir::createReconcileUnrealizedCastsPass(),
+                           enablePass);
 
   return pm.run(module);
 }
