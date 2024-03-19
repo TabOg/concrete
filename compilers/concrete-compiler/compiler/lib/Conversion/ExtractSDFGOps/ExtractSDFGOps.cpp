@@ -294,6 +294,15 @@ struct ExtractSDFGOpsPass : public ExtractSDFGOpsBase<ExtractSDFGOpsPass> {
     }
 
     (void)mlir::simplifyRegions(rewriter, func->getRegions());
+
+      func.walk([&](mlir::scf::ForOp loop) {
+      for (mlir::Operation &op : loop.getBody()->getOperations()) {
+	if (llvm::isa<Concrete::EncodeExpandLutForBootstrapTensorOp>(op)) {
+	  loop->setAttr("parallel", rewriter.getBoolAttr(true));
+	  return;
+	}
+      }
+    });
   }
 };
 } // namespace
