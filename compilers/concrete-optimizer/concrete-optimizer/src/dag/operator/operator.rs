@@ -68,6 +68,21 @@ impl std::ops::Mul<u64> for LevelledComplexity {
 pub type Precision = u8;
 pub const MIN_PRECISION: Precision = 1;
 
+#[derive(PartialEq, Eq, Debug, Clone)]
+pub enum DotKind {
+    // inputs = [x,y,z], weights = [a,b,c], = x*a + y*b + z*c
+    Simple,
+    // inputs = [[x, y, z]], weights = [a,b,c], = same
+    Tensor,
+    // inputs = [[x], [y], [z]], weights = [[a],[b],[c]], = same
+    CompatibleTensor,
+    // inputs = [[x, y, z], [x, y, z]], weights = [[a,b,c]], = [same, same]
+    // inputs = [[x, y, z], [u, v, w]], weights = [a, b], [x*a + u*b, y*a + v*b, z*c + w*c]
+    // inputs = [[x, y, z]], weights = [a], [x*a, y*a, z*a]
+    Broadcast { shape: Shape },
+    Unsupported,
+}
+
 #[derive(Clone, PartialEq, Debug)]
 pub enum Operator {
     Input {
@@ -82,6 +97,7 @@ pub enum Operator {
     Dot {
         inputs: Vec<OperatorIndex>,
         weights: Weights,
+        kind: DotKind,
     },
     LevelledOp {
         inputs: Vec<OperatorIndex>,
@@ -116,7 +132,7 @@ impl Operator {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub struct OperatorIndex(pub usize);
 
 impl Deref for OperatorIndex {
@@ -143,7 +159,9 @@ impl fmt::Display for Operator {
             } => {
                 write!(f, "Input : u{out_precision} x {out_shape:?}")?;
             }
-            Self::Dot { inputs, weights } => {
+            Self::Dot {
+                inputs, weights, ..
+            } => {
                 for (i, (input, weight)) in inputs.iter().zip(weights.values.iter()).enumerate() {
                     if i > 0 {
                         write!(f, " + ")?;
