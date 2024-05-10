@@ -96,6 +96,12 @@ class ValueDescription:
                     dtype=Float(16), shape=value.shape, is_encrypted=is_encrypted
                 )
 
+        # to avoid cyclic import issue
+        from ..tfhers.values import TFHERSInteger
+
+        if isinstance(value, TFHERSInteger):
+            return ValueDescription(dtype=value.dtype, shape=value.shape, is_encrypted=True)
+
         message = f"Concrete cannot represent {repr(value)}"
         raise ValueError(message)
 

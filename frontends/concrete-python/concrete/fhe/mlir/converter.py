@@ -539,7 +539,11 @@ class Converter:
             if shifter != 1:
                 shift_amount = int(np.log2(shifter))
                 pred = ctx.reinterpret(
-                    ctx.mul(pred.type, pred, ctx.constant(ctx.i(pred.bit_width + 1), shifter)),
+                    ctx.mul(
+                        pred.type,
+                        pred,
+                        ctx.constant(ctx.i(pred.bit_width + 1), shifter),
+                    ),
                     bit_width=(pred.bit_width - shift_amount),
                 )
                 final_lsbs_to_remove -= shift_amount
@@ -771,7 +775,11 @@ class Converter:
                 reduce_precision = approx_config.reduce_precision_after_approximate_clipping
                 if len(tables) == 1:
                     lut_values = self.tlu_adjust(
-                        lut_values, variable_input, rounded_bit_width, clipping, reduce_precision
+                        lut_values,
+                        variable_input,
+                        rounded_bit_width,
+                        clipping,
+                        reduce_precision,
                     )
                 else:
                     for sub_i, sub_lut_values in enumerate(lut_values):
@@ -813,5 +821,47 @@ class Converter:
     def zeros(self, ctx: Context, node: Node, preds: List[Conversion]) -> Conversion:
         assert len(preds) == 0
         return ctx.zeros(ctx.typeof(node))
+
+    def tfhers_to_native(self, ctx: Context, node: Node, preds: List[Conversion]) -> Conversion:
+        assert len(preds) == 1
+        tfhers_int = preds[0]
+        result_bit_width, pad_width, msg_width = (
+            node.properties["attributes"]["result_bit_width"],
+            node.properties["attributes"]["pad_width"],
+            node.properties["attributes"]["msg_width"],
+        )
+
+        # result will remove the last dim which is the dim of ciphertexts
+        result_shape = tfhers_int.shape[:-1]
+        # if the result shape is () then the types would actually be scalars
+        result_type = ctx.tensor(ctx.eint(result_bit_width), result_shape)
+        extract_type = ctx.tensor(ctx.eint(msg_width), result_shape)
+
+        n_elem = tfhers_int.shape[-1]
+        acc = ctx.zeros(result_type)
+        # index should span all dims except the last one which select a single elem
+        index = [slice(None, None, None) for _ in range(len(tfhers_int.shape) - 1)]
+        index.append(0)
+        # start with lsb
+        for i in range(n_elem - 1, -1, -1):
+            index[-1] = i
+            ct = ctx.index_static(extract_type, tfhers_int, index)
+            # considering we are iterating the ciphertexts lsb first, we will
+            # shift `msg_width` bits to the left starting from 0
+            shift = msg_width * (n_elem - 1 - i)
+            tlu = [v * 2**shift for v in range(2**msg_width)]
+
+            to_add = ctx.tlu(result_type, ct, tlu)
+            acc = ctx.add(result_type, acc, to_add)
+        return acc
+
+    def tfhers_from_native(self, ctx: Context, node: Node, preds: List[Conversion]) -> Conversion:
+        assert len(preds) == 1
+        pad_width, msg_width = (
+            node.properties["kwargs"]["pad_width"],
+            node.properties["kwargs"]["msg_width"],
+        )
+        # extract bits and put them in a tensor of ct based on crypto params
+        return preds[0]
 
     # pylint: enable=missing-function-docstring,unused-argument

@@ -396,6 +396,10 @@ class AdditionalConstraints:
         inputs_and_output_share_precision,
     }
 
+    tfhers_to_native = {
+        inputs_and_output_share_precision,
+    }
+
     array = {
         inputs_and_output_share_precision,
     }
