@@ -1575,9 +1575,6 @@ class Context:
             }
             self.error(highlights)
 
-        print("resulting type", resulting_type.mlir)
-        print("x type", x.type.mlir)
-        print("y type", y.type.mlir)
         assert self.is_bit_width_compatible(resulting_type, x, y)
 
         x = self.to_signedness(x, of=resulting_type)

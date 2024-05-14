@@ -239,12 +239,15 @@ class Node:
                 # if it fails we raise the exception below
                 pass
 
-        # it's only allowed to have them in input nodes
+        # avoid circular import
         from ..tfhers.values import TFHERSInteger
 
-        if self.operation == Operation.Input and isinstance(result, TFHERSInteger):
-            pass
-        elif not isinstance(result, (np.bool_, np.integer, np.floating, np.ndarray)):
+        result_is_well_typed = isinstance(result, (np.bool_, np.integer, np.floating, np.ndarray))
+        # it's only allowed to have them in input nodes
+        result_is_acceptable_if_tfhers = (
+            not isinstance(result, TFHERSInteger) or self.operation == Operation.Input
+        )
+        if not result_is_well_typed and not result_is_acceptable_if_tfhers:
             message = (
                 f"{generic_error_message()} resulted in {repr(result)} "
                 f"of type {result.__class__.__name__} "

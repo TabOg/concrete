@@ -825,35 +825,31 @@ class Converter:
     def tfhers_to_native(self, ctx: Context, node: Node, preds: List[Conversion]) -> Conversion:
         assert len(preds) == 1
         tfhers_int = preds[0]
+        dtype = node.properties["attributes"]["type"]
         result_bit_width, pad_width, msg_width = (
-            node.properties["attributes"]["result_bit_width"],
-            node.properties["attributes"]["pad_width"],
-            node.properties["attributes"]["msg_width"],
+            dtype.bit_width,
+            dtype.pad_width,
+            dtype.msg_width,
         )
 
-        # result will remove the last dim which is the dim of ciphertexts
-        result_shape = tfhers_int.shape[:-1]
-        # if the result shape is () then the types would actually be scalars
-        result_type = ctx.tensor(ctx.eint(result_bit_width), result_shape)
-        extract_type = ctx.tensor(ctx.eint(msg_width), result_shape)
-
+        # number of ciphertexts representing a single integer
         n_elem = tfhers_int.shape[-1]
-        acc = ctx.zeros(result_type)
-        # index should span all dims except the last one which select a single elem
-        index = [slice(None, None, None) for _ in range(len(tfhers_int.shape) - 1)]
-        index.append(0)
-        # start with lsb
-        for i in range(n_elem - 1, -1, -1):
-            index[-1] = i
-            ct = ctx.index_static(extract_type, tfhers_int, index)
-            # considering we are iterating the ciphertexts lsb first, we will
-            # shift `msg_width` bits to the left starting from 0
-            shift = msg_width * (n_elem - 1 - i)
-            tlu = [v * 2**shift for v in range(2**msg_width)]
+        # first table maps to the lsb, and last one maps to the msb
+        tables = [
+            [value << (msg_width * i) for value in range(2**msg_width)] for i in range(n_elem)
+        ]
+        # ciphertexts are oganized msb first, and tables are lsb first
+        mapping = np.broadcast_to(np.array(list(reversed(range(n_elem)))), tfhers_int.shape)
 
-            to_add = ctx.tlu(result_type, ct, tlu)
-            acc = ctx.add(result_type, acc, to_add)
-        return acc
+        # intermediate type increase bit_width via TLU but keep the same shape
+        interm_type = ctx.tensor(ctx.eint(result_bit_width), tfhers_int.shape)
+        mapped = ctx.multi_tlu(interm_type, tfhers_int, tables, mapping)
+
+        # sum will remove the last dim which is the dim of ciphertexts
+        result_shape = tfhers_int.shape[:-1]
+        # if result_shape is () then ctx.tensor would return a scalar type
+        result_type = ctx.tensor(ctx.eint(result_bit_width), result_shape)
+        return ctx.sum(result_type, mapped, axes=-1)
 
     def tfhers_from_native(self, ctx: Context, node: Node, preds: List[Conversion]) -> Conversion:
         assert len(preds) == 1

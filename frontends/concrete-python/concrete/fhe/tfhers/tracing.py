@@ -27,13 +27,10 @@ def from_native(value, dtype_to: TFHERSIntegerType):
 
 
 def _trace_to_native(tfhers_int: Tracer, dtype: TFHERSIntegerType):
-    if tfhers_int.output.is_scalar:
-        output = EncryptedScalar(Integer(dtype.is_signed, dtype.bit_width))
-    else:
-        output = EncryptedTensor(
-            Integer(dtype.is_signed, dtype.bit_width),
-            tfhers_int.output.shape,
-        )
+    output = EncryptedTensor(
+        Integer(dtype.is_signed, dtype.bit_width),
+        tfhers_int.output.shape,
+    )
 
     computation = Node.generic(
         "tfhers_to_native",
@@ -45,11 +42,7 @@ def _trace_to_native(tfhers_int: Tracer, dtype: TFHERSIntegerType):
         output,
         _eval_to_native,
         args=(),
-        attributes={
-            "result_bit_width": dtype.bit_width,
-            "pad_width": dtype.pad_width,
-            "msg_width": dtype.msg_width,
-        },
+        attributes={"type": dtype},
     )
     return Tracer(
         computation,
@@ -60,10 +53,7 @@ def _trace_to_native(tfhers_int: Tracer, dtype: TFHERSIntegerType):
 
 
 def _trace_from_native(native_int: Tracer, dtype_to: TFHERSIntegerType):
-    if native_int.output.is_scalar:
-        output = EncryptedScalar(dtype_to)
-    else:
-        output = EncryptedTensor(dtype_to, native_int.output.shape)
+    output = EncryptedTensor(dtype_to, native_int.output.shape)
 
     computation = Node.generic(
         "tfhers_from_native",

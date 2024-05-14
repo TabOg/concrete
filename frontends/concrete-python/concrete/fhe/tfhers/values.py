@@ -1,5 +1,5 @@
 from functools import partial
-from typing import Union
+from typing import List, Union
 
 import numpy as np
 
@@ -16,10 +16,16 @@ class TFHERSInteger:
     def __init__(
         self,
         dtype: TFHERSIntegerType,
-        value: Union[int, np.ndarray],
+        value: Union[List, int, np.ndarray],
     ):
         if isinstance(value, int):
             self._shape = ()
+        elif isinstance(value, list):
+            try:
+                value = np.array(value)
+            except Exception as e:  # pylint: disable=broad-except
+                msg = f"got error while trying to convert list value into a numpy array: {e}"
+                raise ValueError()
         elif isinstance(value, np.ndarray):
             if value.max() > dtype.max():
                 raise ValueError(
