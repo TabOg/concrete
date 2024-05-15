@@ -9,26 +9,26 @@ from ..dtypes import Integer
 
 
 class TFHERSIntegerType(Integer):
-    pad_width: int
+    carry_width: int
     msg_width: int
 
-    def __init__(self, is_signed: bool, bit_width: int, pad_width: int, msg_width: int):
+    def __init__(self, is_signed: bool, bit_width: int, carry_width: int, msg_width: int):
         super().__init__(is_signed, bit_width)
-        self.pad_width = pad_width
+        self.carry_width = carry_width
         self.msg_width = msg_width
 
     def __eq__(self, other: Any) -> bool:
         return (
             isinstance(other, self.__class__)
             and super().__eq__(other)
-            and self.pad_width == other.pad_width
+            and self.carry_width == other.carry_width
             and self.msg_width == other.msg_width
         )
 
     def __str__(self) -> str:
         return (
-            f"tfhers_{('int' if self.is_signed else 'uint')}"
-            f"{self.bit_width}_{self.pad_width}_{self.msg_width}"
+            f"tfhers<{('int' if self.is_signed else 'uint')}"
+            f"{self.bit_width}, {self.carry_width}, {self.msg_width}>"
         )
 
 

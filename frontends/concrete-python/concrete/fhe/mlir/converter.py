@@ -826,20 +826,23 @@ class Converter:
         assert len(preds) == 1
         tfhers_int = preds[0]
         dtype = node.properties["attributes"]["type"]
-        result_bit_width, pad_width, msg_width = (
+        result_bit_width, carry_width, msg_width = (
             dtype.bit_width,
-            dtype.pad_width,
+            dtype.carry_width,
             dtype.msg_width,
         )
 
         # number of ciphertexts representing a single integer
-        n_elem = tfhers_int.shape[-1]
+        num_cts = tfhers_int.shape[-1]
         # first table maps to the lsb, and last one maps to the msb
         tables = [
-            [value << (msg_width * i) for value in range(2**msg_width)] for i in range(n_elem)
+            # the base table consider the message bits only, but we repeat it to take into account
+            # the padding bits without considering their values
+            [value << (msg_width * i) for value in range(2**msg_width)] * 2**carry_width
+            for i in range(num_cts)
         ]
         # ciphertexts are oganized msb first, and tables are lsb first
-        mapping = np.broadcast_to(np.array(list(reversed(range(n_elem)))), tfhers_int.shape)
+        mapping = np.broadcast_to(np.array(list(reversed(range(num_cts)))), tfhers_int.shape)
 
         # intermediate type increase bit_width via TLU but keep the same shape
         interm_type = ctx.tensor(ctx.eint(result_bit_width), tfhers_int.shape)
@@ -853,11 +856,39 @@ class Converter:
 
     def tfhers_from_native(self, ctx: Context, node: Node, preds: List[Conversion]) -> Conversion:
         assert len(preds) == 1
-        pad_width, msg_width = (
-            node.properties["kwargs"]["pad_width"],
-            node.properties["kwargs"]["msg_width"],
+        dtype = node.properties["attributes"]["type"]
+        input_bit_width, carry_width, msg_width = (
+            dtype.bit_width,
+            dtype.carry_width,
+            dtype.msg_width,
         )
-        # extract bits and put them in a tensor of ct based on crypto params
-        return preds[0]
+        native_int = preds[0]
+        assert input_bit_width == native_int.bit_width
+        assert input_bit_width % msg_width == 0
+
+        # number of ciphertexts representing a single integer
+        num_cts = input_bit_width // msg_width
+
+        # adds a dimension of ciphertexts
+        result_shape = native_int.shape + (num_cts,)
+        result_type = ctx.tensor(ctx.eint(msg_width + carry_width), result_shape)
+
+        # duplicate tensor over new dimension (ciphertext dimension)
+        reshaped_native_int = ctx.reshape(native_int, native_int.shape + (1,))
+        interm_type = ctx.tensor(ctx.eint(input_bit_width), result_shape)
+        extended_native_int = ctx.concatenate(
+            interm_type, [reshaped_native_int for _ in range(num_cts)], axis=-1
+        )
+
+        # tables are supposed to extract bits at different offsets.
+        # it breaks a ciphertext of native_bit_width bits to n_elem
+        # cipheretext of msg_width + carry_width bits
+        tables = [
+            [i for i in range(2**msg_width) for _ in range(2**repeat_pow)]
+            * 2 ** (input_bit_width - repeat_pow - msg_width)
+            for repeat_pow in range(0, input_bit_width, msg_width)
+        ]
+        mapping = np.broadcast_to(np.array(list(reversed(range(num_cts)))), result_shape)
+        return ctx.multi_tlu(result_type, extended_native_int, tables, mapping)
 
     # pylint: enable=missing-function-docstring,unused-argument

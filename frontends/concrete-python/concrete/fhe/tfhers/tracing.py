@@ -23,7 +23,7 @@ def to_native(value: Union[Tracer, TFHERSInteger]):
 def from_native(value, dtype_to: TFHERSIntegerType):
     if isinstance(value, Tracer):
         return _trace_from_native(value, dtype_to)
-    return _eval_from_native(value, dtype_to.pad_width, dtype_to.msg_width)
+    return _eval_from_native(value)
 
 
 def _trace_to_native(tfhers_int: Tracer, dtype: TFHERSIntegerType):
@@ -65,7 +65,7 @@ def _trace_from_native(native_int: Tracer, dtype_to: TFHERSIntegerType):
         output,
         _eval_from_native,
         args=(),
-        kwargs={"pad_width": dtype_to.pad_width, "msg_width": dtype_to.msg_width},
+        attributes={"type": dtype_to},
     )
     return Tracer(
         computation,
@@ -96,5 +96,5 @@ def _eval_to_native(tfhers_int: TFHERSInteger):
     return tfhers_int.value
 
 
-def _eval_from_native(native_value, pad_width: int, msg_width: int):
+def _eval_from_native(native_value):
     return native_value

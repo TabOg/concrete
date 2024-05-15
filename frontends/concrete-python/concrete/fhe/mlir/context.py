@@ -120,12 +120,15 @@ class Context:
         # TODO: what about the element type? only unsigned? or not eint at all?
         if isinstance(value.dtype, TFHERSIntegerType):
             msg_width = value.dtype.msg_width
+            # padding is not really considered as part of the message
+            # However it is part of the result type
+            carry_width = value.dtype.carry_width
             assert bit_width % msg_width == 0
-            # we need ct_shape ct of msg_width bits to represent a ct of bit_width bits
+            # we need ct_shape ct of msg_width (+ carry_width) bits to represent a ct of bit_width bits
             ct_shape = (bit_width // msg_width,)
             # we add the dimension of ciphertexts at the end (old_dims..., ct_shape)
             shape = value.shape + ct_shape
-            element_type = self.eint(msg_width)
+            element_type = self.eint(msg_width + carry_width)
             return self.tensor(element_type, shape)
 
         if value.is_clear:
