@@ -990,6 +990,7 @@ class Configuration:
     enable_tlu_fusing: bool
     print_tlu_fusing: bool
     optimize_tlu_based_on_original_bit_width: Union[bool, int]
+    dynamic_indexing_check_out_of_bound: bool
 
     def __init__(
         self,
@@ -1055,6 +1056,7 @@ class Configuration:
         enable_tlu_fusing: bool = True,
         print_tlu_fusing: bool = False,
         optimize_tlu_based_on_original_bit_width: Union[bool, int] = 8,
+        dynamic_indexing_check_out_of_bound: bool = True,
     ):
         self.verbose = verbose
         self.compiler_debug_mode = compiler_debug_mode
@@ -1155,6 +1157,8 @@ class Configuration:
 
         self.optimize_tlu_based_on_original_bit_width = optimize_tlu_based_on_original_bit_width
 
+        self.dynamic_indexing_check_out_of_bound = dynamic_indexing_check_out_of_bound
+
         self._validate()
 
     class Keep:
@@ -1223,6 +1227,7 @@ class Configuration:
         enable_tlu_fusing: Union[Keep, bool] = KEEP,
         print_tlu_fusing: Union[Keep, bool] = KEEP,
         optimize_tlu_based_on_original_bit_width: Union[Keep, bool, int] = KEEP,
+        dynamic_indexing_check_out_of_bound: Union[Keep, bool] = KEEP,
     ) -> "Configuration":
         """
         Get a new configuration from another one specified changes.

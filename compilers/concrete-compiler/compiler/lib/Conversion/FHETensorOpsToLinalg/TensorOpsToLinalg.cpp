@@ -1346,8 +1346,15 @@ struct ConcatRewritePattern
     llvm::ArrayRef<int64_t> outputShape = outputType.getShape();
     size_t outputDimensions = outputShape.size();
 
+    bool is_encrypted =
+        outputType.getElementType().isa<FHE::FheIntegerInterface>();
     mlir::Value result =
-        rewriter.create<FHE::ZeroTensorOp>(location, outputType).getResult();
+        is_encrypted ? rewriter.create<FHE::ZeroTensorOp>(location, outputType)
+                           .getResult()
+                     : rewriter
+                           .create<tensor::EmptyOp>(location, outputShape,
+                                                    outputType.getElementType())
+                           .getResult();
 
     auto offsets = llvm::SmallVector<int64_t, 3>{};
     auto sizes = llvm::SmallVector<int64_t, 3>{};

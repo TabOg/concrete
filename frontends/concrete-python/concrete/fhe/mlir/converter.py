@@ -232,6 +232,9 @@ class Converter:
                 ),
             ]
             + configuration.additional_post_processors
+            + [
+                AssignNodeIds(),
+            ]
         )
 
         for processor in pipeline:
@@ -404,13 +407,46 @@ class Converter:
         assert len(preds) == 1
         return ctx.identity(ctx.typeof(node), preds[0])
 
+    def index_dynamic(self, ctx: Context, node: Node, preds: List[Conversion]) -> Conversion:
+        from .operations.indexing import indexing
+
+        assert len(preds) >= 2
+
+        x = preds[0]
+        dynamic_indices = preds[1:]
+        static_indices = node.properties["kwargs"]["static_indices"]
+
+        indices = []
+
+        cursor = 0
+        for index in static_indices:
+            if index is None:
+                indices.append(dynamic_indices[cursor])
+                cursor += 1
+            else:
+                indices.append(index)
+
+        return indexing(ctx, ctx.typeof(node), x, indices)
+
+        # assert len(preds) >= 2
+        # return ctx.index_dynamic(
+        #     ctx.typeof(node),
+        #     preds[0],
+        #     index=preds[1:],
+        # )
+
     def index_static(self, ctx: Context, node: Node, preds: List[Conversion]) -> Conversion:
+        from .operations.indexing import indexing
+
         assert len(preds) == 1
-        return ctx.index_static(
-            ctx.typeof(node),
-            preds[0],
-            index=node.properties["kwargs"]["index"],
-        )
+        return indexing(ctx, ctx.typeof(node), preds[0], node.properties["kwargs"]["index"])
+
+        # assert len(preds) == 1
+        # return ctx.index_static(
+        #     ctx.typeof(node),
+        #     preds[0],
+        #     index=node.properties["kwargs"]["index"],
+        # )
 
     def left_shift(self, ctx: Context, node: Node, preds: List[Conversion]) -> Conversion:
         assert len(preds) == 2

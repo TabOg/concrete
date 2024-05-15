@@ -388,6 +388,14 @@ class AdditionalConstraints:
                 node.properties["strategy"] = strategy
                 break
 
+    def dynamic_indexing(self, node: Node, preds: List[Node]):
+        self.inputs_share_precision(node, preds[:1])
+        for dimension, pred in zip(preds[0].output.shape, preds[1:]):
+            self.constraint(
+                node,
+                self.bit_widths[pred] >= Integer.that_can_represent(dimension).bit_width,
+            )
+
     # ==========
     # Operations
     # ==========
@@ -476,6 +484,10 @@ class AdditionalConstraints:
         all_inputs_are_encrypted: {
             comparison,
         },
+    }
+
+    index_dynamic = {
+        dynamic_indexing,
     }
 
     index_static = {

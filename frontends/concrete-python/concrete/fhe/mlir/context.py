@@ -7,9 +7,9 @@ Declaration of `Context` class.
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Set, Tuple, Union
 
 import numpy as np
-from concrete.lang.dialects import fhe, fhelinalg
+from concrete.lang.dialects import fhe, fhelinalg, tracing
 from concrete.lang.dialects.fhe import EncryptedIntegerType, EncryptedSignedIntegerType
-from mlir.dialects import arith, tensor
+from mlir.dialects import arith, scf, tensor
 from mlir.ir import ArrayAttr as MlirArrayAttr
 from mlir.ir import Attribute as MlirAttribute
 from mlir.ir import BoolAttr as MlirBoolAttr
@@ -17,9 +17,12 @@ from mlir.ir import Context as MlirContext
 from mlir.ir import DenseElementsAttr as MlirDenseElementsAttr
 from mlir.ir import DenseI64ArrayAttr as MlirDenseI64ArrayAttr
 from mlir.ir import IndexType
+from mlir.ir import InsertionPoint as MlirInsertionPoint
 from mlir.ir import IntegerAttr as MlirIntegerAttr
 from mlir.ir import IntegerType
 from mlir.ir import Location as MlirLocation
+from mlir.ir import NoneType
+from mlir.ir import Operation as MlirRawOperation
 from mlir.ir import OpResult as MlirOperation
 from mlir.ir import RankedTensorType
 from mlir.ir import Type as MlirType
@@ -53,7 +56,7 @@ class Context:
     conversions: Dict[Node, Conversion]
     converting: Node
 
-    conversion_cache: Dict[Tuple, Conversion]
+    conversion_cache: Dict[Tuple, Tuple[Conversion, ...]]
     constant_cache: Dict[MlirAttribute, MlirOperation]
 
     configuration: Configuration
@@ -90,11 +93,17 @@ class Context:
         """
         return ConversionType(EncryptedSignedIntegerType.get(self.context, width))
 
-    def index_type(self) -> MlirType:
+    def index_type(self) -> ConversionType:
         """
         Get index type.
         """
         return ConversionType(IndexType.parse("index"))
+
+    def none_type(self) -> ConversionType:
+        """
+        Get none type.
+        """
+        return ConversionType(NoneType.get())
 
     def tensor(self, element_type: ConversionType, shape: Tuple[int, ...]) -> ConversionType:
         """
@@ -106,10 +115,13 @@ class Context:
             else element_type
         )
 
-    def typeof(self, value: Union[ValueDescription, Node]) -> ConversionType:
+    def typeof(self, value: Optional[Union[ValueDescription, Node]]) -> ConversionType:
         """
         Get type corresponding to a value or a node.
         """
+        if value is None:
+            return ConversionType(NoneType.get())
+
         if isinstance(value, Node):
             value = value.output
 
@@ -124,6 +136,25 @@ class Context:
             result = self.eint(bit_width)
 
         return result if value.is_scalar else self.tensor(result, value.shape)
+
+    def element_typeof(self, value: Union[Conversion, ConversionType]) -> ConversionType:
+        """
+        Get type corresponding to the elements of a tensor type.
+        """
+
+        if isinstance(value, Conversion):
+            value = value.type
+
+        if value.is_index:
+            return self.index_type()
+
+        if value.is_clear:
+            return self.i(value.bit_width)
+
+        if value.is_signed:
+            return self.esint(value.bit_width)
+
+        return self.eint(value.bit_width)
 
     # utilities
 
@@ -206,9 +237,10 @@ class Context:
     def operation(
         self,
         operation: Callable,
-        resulting_type: ConversionType,
+        resulting_type: Optional[ConversionType],
         *args,
         original_bit_width: Optional[int] = None,
+        use_cache: bool = True,
         **kwargs,
     ) -> Conversion:
         """
@@ -218,14 +250,17 @@ class Context:
             operation (Callable):
                 MLIR operation to create (e.g., fhe.AddEintOp)
 
-            resulting_type (ConversionType):
-                type of the output of the operation
+            resulting_type (Optional[ConversionType]):
+                optional type of the output of the operation
 
             *args (Any):
                 args to pass to the operation
 
             original_bit_width (Optional[int], default = None):
                 original bit width of the resulting conversion
+
+            use_cache (bool, default = True):
+                whether to use the operation cache or not
 
             *kwargs (Any):
                 kwargs to pass to the operation
@@ -234,25 +269,118 @@ class Context:
                 resulting conversion
         """
 
-        cache_key = (resulting_type.mlir, operation, *args, *kwargs)
-        cached_conversion = self.conversion_cache.get(cache_key)
+        cache_key = (
+            resulting_type.mlir if resulting_type is not None else None,
+            operation,
+            *args,
+            *kwargs,
+        )
+        cached_conversions = self.conversion_cache.get(cache_key) if use_cache else None
 
-        if cached_conversion is None:
+        if cached_conversions is None or not use_cache:
             # since the operations are cached
             # if an operation is repeated in a different location,
             # it'll have the location of the first instance of that operation
-            if operation not in [tensor.ExtractOp, tensor.InsertSliceOp]:
-                result = operation(resulting_type.mlir, *args, **kwargs, loc=self.location()).result
+            if operation in [
+                arith.AddIOp,
+                arith.CmpIOp,
+                scf.YieldOp,
+                tensor.ExtractOp,
+                tensor.InsertSliceOp,
+            ]:
+                resulting_operation = operation(*args, **kwargs, loc=self.location())
+
+            elif operation in [scf.IfOp]:
+                resulting_operation = operation(
+                    args[0],
+                    [resulting_type.mlir] if resulting_type is not None else [],
+                    **kwargs,
+                    loc=self.location(),
+                )
+
             else:
-                result = operation(*args, **kwargs, loc=self.location()).result
+                assert resulting_type is not None
+                resulting_operation = operation(
+                    resulting_type.mlir,
+                    *args,
+                    **kwargs,
+                    loc=self.location(),
+                )
 
-            cached_conversion = Conversion(self.converting, result)
-            if original_bit_width is not None:
-                cached_conversion.set_original_bit_width(original_bit_width)
+            resulting_conversions = []
+            for result in resulting_operation.results:
+                resulting_conversion = Conversion(self.converting, result)
+                if original_bit_width is not None:
+                    resulting_conversion.set_original_bit_width(original_bit_width)
+                resulting_conversions.append(resulting_conversion)
 
-            self.conversion_cache[cache_key] = cached_conversion
+            cached_conversions = tuple(resulting_conversions)
+            if use_cache:
+                self.conversion_cache[cache_key] = cached_conversions
 
-        return cached_conversion
+        if len(cached_conversions) == 1:
+            return cached_conversions[0]
+
+        return cached_conversions
+
+    # scf
+
+    def conditional(
+        self,
+        resulting_type: Optional[ConversionType],
+        condition: Conversion,
+        then_builder: Callable[[], Optional[Conversion]],
+        else_builder: Optional[Callable[[], Optional[Conversion]]] = None,
+    ) -> Optional[Conversion]:
+        conditional_operation = scf.IfOp(
+            condition.result,
+            [resulting_type.mlir] if resulting_type is not None else [],
+            hasElse=(else_builder is not None),
+            loc=self.location(),
+        )
+
+        then_block = conditional_operation.regions[0].blocks[0]
+        with MlirInsertionPoint.at_block_begin(then_block):
+            yielded = then_builder()
+            if yielded is not None:
+                self.operation(
+                    scf.YieldOp,
+                    resulting_type,
+                    (yielded.result,),
+                    use_cache=False,
+                )
+            else:
+                self.operation(
+                    scf.YieldOp,
+                    self.none_type(),
+                    (),
+                    use_cache=False,
+                )
+
+        if else_builder is not None:
+            else_block = conditional_operation.regions[1].blocks[0]
+            with MlirInsertionPoint.at_block_begin(else_block):
+                yielded = else_builder()
+                if yielded is not None:
+                    self.operation(
+                        scf.YieldOp,
+                        resulting_type,
+                        (yielded.result,),
+                        use_cache=False,
+                    )
+                else:
+                    self.operation(
+                        scf.YieldOp,
+                        self.none_type(),
+                        (),
+                        use_cache=False,
+                    )
+
+        if len(conditional_operation.results) > 0:
+            resulting_conversion = Conversion(self.converting, conditional_operation.result)
+            return resulting_conversion
+
+        return None
 
     # comparisons
 
@@ -375,7 +503,7 @@ class Context:
         accept_greater = int(Comparison.GREATER in accept)
         accept_less = int(Comparison.LESS in accept)
 
-        all_cells = 2**subtraction.bit_width
+        all_cells = 2 ** subtraction.bit_width
 
         equal_cells = 1
         greater_cells = (2 ** (subtraction.bit_width - 1)) - 1
@@ -540,7 +668,7 @@ class Context:
         clipper_lut = []
         if bigger.is_unsigned:
             clipper_lut += [
-                np.clip(i, low_bound, high_bound) for i in range(0, 2**bigger.bit_width)
+                np.clip(i, low_bound, high_bound) for i in range(0, 2 ** bigger.bit_width)
             ]
         else:
             clipper_lut += [
@@ -689,7 +817,7 @@ class Context:
             signed_offset = 2 ** (signed_input.original_bit_width - 1)
             is_unsigned_greater_lut = [
                 int(value >= signed_offset) << carry_bit_width
-                for value in range(2**unsigned_input.bit_width)
+                for value in range(2 ** unsigned_input.bit_width)
             ]
 
             is_unsigned_greater = None
@@ -731,12 +859,12 @@ class Context:
             if not y_was_signed:
                 result_lut = [
                     (1 if (i >> carry_bit_width) else int((i & Comparison.MASK) in accept))
-                    for i in range(2**3)
+                    for i in range(2 ** 3)
                 ]
             else:
                 result_lut = [
                     (0 if (i >> carry_bit_width) else int((i & Comparison.MASK) in accept))
-                    for i in range(2**3)
+                    for i in range(2 ** 3)
                 ]
 
             result = self.tlu(
@@ -780,7 +908,7 @@ class Context:
 
             signed_offset = 2 ** (signed_input.original_bit_width - 1)
             is_unsigned_greater_lut = [
-                int(value >= signed_offset) for value in range(2**unsigned_input.bit_width)
+                int(value >= signed_offset) for value in range(2 ** unsigned_input.bit_width)
             ]
 
             if not all(value == 0 for value in is_unsigned_greater_lut):
@@ -814,7 +942,7 @@ class Context:
             self.tree_add(self.tensor(intermediate_scalar_type, resulting_type.shape), carries),
             [
                 int(i == 0 if Comparison.EQUAL in accept else i != 0)
-                for i in range(2**intermediate_scalar_type.bit_width)
+                for i in range(2 ** intermediate_scalar_type.bit_width)
             ],
         )
 
@@ -943,15 +1071,15 @@ class Context:
             chunk_size = chunk_end - chunk_start
 
             shift_to_clear_lsbs = chunk_start
-            mask_to_clear_msbs = (2**chunk_size) - 1
+            mask_to_clear_msbs = (2 ** chunk_size) - 1
 
             x_chunk_lut = [
                 (((x + x_offset) >> shift_to_clear_lsbs) & mask_to_clear_msbs) << chunk_size
-                for x in range(2**x.bit_width)
+                for x in range(2 ** x.bit_width)
             ]
             y_chunk_lut = [
                 (((y + y_offset) >> shift_to_clear_lsbs) & mask_to_clear_msbs)
-                for y in range(2**y.bit_width)
+                for y in range(2 ** y.bit_width)
             ]
 
             x_chunk_is_constant = all(x == x_chunk_lut[0] for x in x_chunk_lut)
@@ -1064,7 +1192,7 @@ class Context:
                 if needs_shift:
                     shifter = self.constant(
                         self.i(bit_width_to_pack + 1),
-                        2**shift_amount,
+                        2 ** shift_amount,
                     )
                     x = self.mul(x.type, x, shifter)
 
@@ -1081,7 +1209,7 @@ class Context:
                 shift_table = [value + 2 ** (x.original_bit_width - 1) for value in shift_table]
 
             if needs_shift:
-                shift_table = [value * (2**shift_amount) for value in shift_table]
+                shift_table = [value * (2 ** shift_amount) for value in shift_table]
 
             shifted_xs.append(
                 self.tlu(
@@ -1212,7 +1340,7 @@ class Context:
             )
 
             table = []
-            for i in range(2**x.bit_width):
+            for i in range(2 ** x.bit_width):
                 if i % 2 == 0:
                     table.append(0)
                     continue
@@ -1242,11 +1370,11 @@ class Context:
                     continue
 
                 shift_to_clear_lsbs = chunk_start
-                mask_to_clear_msbs = (2**chunk_size) - 1
+                mask_to_clear_msbs = (2 ** chunk_size) - 1
 
                 x_chunk_lut = [
                     ((x >> shift_to_clear_lsbs) & mask_to_clear_msbs) << 1
-                    for x in range(2**x.bit_width)
+                    for x in range(2 ** x.bit_width)
                 ]
 
                 packing_element_type = self.eint(chunk_size + 1)
@@ -1263,7 +1391,7 @@ class Context:
                     packing,
                     [
                         (packing >> 1) << chunk_start if packing % 2 == 1 else 0
-                        for packing in range(2**packing_element_type.bit_width)
+                        for packing in range(2 ** packing_element_type.bit_width)
                     ],
                 )
                 x_contribution_chunks.append(x_contribution_chunk)
@@ -1307,7 +1435,7 @@ class Context:
             )
 
             table = []
-            for i in range(2**y.bit_width):
+            for i in range(2 ** y.bit_width):
                 if i % 2 == 1:
                     table.append(0)
                     continue
@@ -1337,11 +1465,11 @@ class Context:
                     continue
 
                 shift_to_clear_lsbs = chunk_start
-                mask_to_clear_msbs = (2**chunk_size) - 1
+                mask_to_clear_msbs = (2 ** chunk_size) - 1
 
                 y_chunk_lut = [
                     ((y >> shift_to_clear_lsbs) & mask_to_clear_msbs) << 1
-                    for y in range(2**y.bit_width)
+                    for y in range(2 ** y.bit_width)
                 ]
 
                 packing_element_type = self.eint(chunk_size + 1)
@@ -1358,7 +1486,7 @@ class Context:
                     packing,
                     [
                         (packing >> 1) << chunk_start if packing % 2 == 0 else 0
-                        for packing in range(2**packing_element_type.bit_width)
+                        for packing in range(2 ** packing_element_type.bit_width)
                     ],
                 )
                 y_contribution_chunks.append(y_contribution_chunk)
@@ -1449,13 +1577,13 @@ class Context:
                     packed_boolean_and_chunk,
                     (
                         (
-                            [0 for _ in range(2**chunk_size)]
-                            + [x << start for x in range(2**chunk_size)]
+                            [0 for _ in range(2 ** chunk_size)]
+                            + [x << start for x in range(2 ** chunk_size)]
                         )
                         if not inverted
                         else (
-                            [x << start for x in range(2**chunk_size)]
-                            + [0 for _ in range(2**chunk_size)]
+                            [x << start for x in range(2 ** chunk_size)]
+                            + [0 for _ in range(2 ** chunk_size)]
                         )
                     ),
                 )
@@ -1497,7 +1625,7 @@ class Context:
                             # boolean=1, sign=0
                             0,
                             # boolean=1, sign=1
-                            -(2**value.original_bit_width),
+                            -(2 ** value.original_bit_width),
                         ]
                     )
                     if not inverted
@@ -1506,7 +1634,7 @@ class Context:
                             # boolean=0, sign=0
                             0,
                             # boolean=0, sign=1
-                            -(2**value.original_bit_width),
+                            -(2 ** value.original_bit_width),
                             # boolean=1, sign=0
                             0,
                             # boolean=1, sign=1
@@ -1529,7 +1657,7 @@ class Context:
             return value
 
         shift_amount = value.bit_width - value.original_bit_width
-        shifter = self.constant(self.i(value.bit_width + 1), 2**shift_amount)
+        shifter = self.constant(self.i(value.bit_width + 1), 2 ** shift_amount)
         shifted = self.mul(value.type, value, shifter)
 
         return self.reinterpret(shifted, bit_width=value.original_bit_width)
@@ -1835,7 +1963,7 @@ class Context:
                     is_encrypted=False,
                 )
             )
-            shifter = self.constant(shifter_type, 2**y.original_bit_width)
+            shifter = self.constant(shifter_type, 2 ** y.original_bit_width)
 
             shifted_x = self.mul(x.type, x, shifter)
             packed_x_and_y = self.add(
@@ -1849,21 +1977,21 @@ class Context:
                 packed_x_and_y,
                 [
                     operation(x_value, y_value)
-                    for x_value in range(2**x.original_bit_width)
-                    for y_value in range(2**y.original_bit_width)
+                    for x_value in range(2 ** x.original_bit_width)
+                    for y_value in range(2 ** y.original_bit_width)
                 ],
             )
 
         chunks = []
         for start, end in self.best_chunk_ranges(x, 0, y, 0):
             size = end - start
-            mask = (2**size) - 1
+            mask = (2 ** size) - 1
 
             intermediate_bit_width = size * 2
             intermediate_scalar_type = self.eint(intermediate_bit_width)
 
-            x_chunk_lut = [((x >> start) & mask) << size for x in range(2**x.original_bit_width)]
-            y_chunk_lut = [(y >> start) & mask for y in range(2**y.original_bit_width)]
+            x_chunk_lut = [((x >> start) & mask) << size for x in range(2 ** x.original_bit_width)]
+            y_chunk_lut = [(y >> start) & mask for y in range(2 ** y.original_bit_width)]
 
             x_chunk_is_constant = all(x == x_chunk_lut[0] for x in x_chunk_lut)
             y_chunk_is_constant = all(y == y_chunk_lut[0] for y in y_chunk_lut)
@@ -1908,7 +2036,7 @@ class Context:
             result_chunk = self.tlu(
                 resulting_type,
                 packed_x_and_y_chunks,
-                [operation(x, y) << start for x in range(2**size) for y in range(2**size)],
+                [operation(x, y) << start for x in range(2 ** size) for y in range(2 ** size)],
             )
 
             chunks.append(result_chunk)
@@ -1940,25 +2068,14 @@ class Context:
         return self.bitwise(resulting_type, x, y, lambda a, b: a ^ b)
 
     def broadcast_to(self, x: Conversion, shape: Tuple[int, ...]):
-        if x.is_clear:
-            highlights = {
-                x.origin: "value is clear",
-                self.converting: "but clear values cannot be broadcasted",
-            }
-            self.error(highlights)
-
         if x.shape == shape:
             return x
 
-        resulting_type = self.typeof(
-            ValueDescription(
-                dtype=Integer(is_signed=x.is_signed, bit_width=x.bit_width),
-                shape=shape,
-                is_encrypted=x.is_encrypted,
-            )
+        return self.operation(
+            tensor.SplatOp,
+            self.tensor(self.element_typeof(x.type), shape),
+            x.result,
         )
-
-        return self.add(resulting_type, x, self.zeros(resulting_type))
 
     def cast(self, resulting_type: ConversionType, x: Conversion) -> Conversion:
         assert x.original_bit_width <= resulting_type.bit_width
@@ -1982,16 +2099,11 @@ class Context:
         xs: List[Conversion],
         axis: Optional[int],
     ) -> Conversion:
-        if resulting_type.is_clear:
-            highlights = {x.origin: "value is clear" for x in xs}
-            highlights[self.converting] = "but clear concatenation is not supported"
-            self.error(highlights)
-
         assert self.is_bit_width_compatible(resulting_type, *xs)
 
         sanitized_xs = []
         for x in xs:
-            if x.is_clear:
+            if x.is_clear and resulting_type.is_encrypted:
                 encrypted_type = self.typeof(
                     ValueDescription(
                         dtype=Integer(
@@ -2192,7 +2304,7 @@ class Context:
     ) -> Conversion:
         assert table.is_clear and on.is_encrypted
 
-        if table.shape != (2**on.bit_width,):
+        if table.shape != (2 ** on.bit_width,):
             highlights: Dict[Node, Union[str, List[str]]] = {
                 table.origin: [
                     f"table has the shape {table.shape}",
@@ -2298,7 +2410,7 @@ class Context:
 
             if lsb.bit_width > resulting_type.bit_width:
                 difference = (lsb.bit_width - resulting_type.bit_width) + position
-                shifter = self.constant(self.i(lsb.bit_width + 1), 2**difference)
+                shifter = self.constant(self.i(lsb.bit_width + 1), 2 ** difference)
                 shifted = self.mul(lsb.type, lsb, shifter)
                 lsb = self.reinterpret(shifted, bit_width=resulting_type.bit_width)
 
@@ -2311,7 +2423,7 @@ class Context:
                 lsb = self.tlu(resulting_type, lsb, [0 << position, 1 << position])
 
             elif position != 0:
-                shifter = self.constant(self.i(lsb.bit_width + 1), 2**position)
+                shifter = self.constant(self.i(lsb.bit_width + 1), 2 ** position)
                 lsb = self.mul(lsb.type, lsb, shifter)
 
             assert lsb is not None
@@ -2359,11 +2471,123 @@ class Context:
             base = self.mul(
                 resulting_type,
                 sign,
-                self.constant(self.i(sign.bit_width + 1), -(2**x.original_bit_width)),
+                self.constant(self.i(sign.bit_width + 1), -(2 ** x.original_bit_width)),
             )
             result = self.add(resulting_type, base, result)
 
         return result
+
+    def index_dynamic(
+        self,
+        resulting_type: ConversionType,
+        x: Conversion,
+        index: List[Conversion],
+    ) -> Conversion:
+        assert len(index) == len(x.shape)
+
+        indices = []
+        for dimension, indexing_element in zip(x.shape, index):
+            indexing_element_node = indexing_element.origin
+
+            dimension_variable_type = self.i(
+                max(
+                    Integer.that_can_represent(dimension).bit_width + 1,
+                    indexing_element.bit_width,
+                )
+            )
+            dimension_variable: Optional[Conversion] = None
+
+            assert isinstance(indexing_element.origin.output.dtype, Integer)
+            if indexing_element.origin.output.dtype.is_signed:
+                dimension_variable = self.constant(dimension_variable_type, dimension)
+                if indexing_element.bit_width < dimension_variable.bit_width:
+                    indexing_element = self.operation(
+                        arith.ExtSIOp, dimension_variable_type, indexing_element.result
+                    )
+
+                offset_condition = self.operation(
+                    arith.CmpIOp,
+                    self.i(1),
+                    self.attribute(self.i(64), 2),  # signed less than
+                    indexing_element.result,
+                    self.constant(indexing_element.type, 0).result,
+                )
+
+                indexing_element = self.conditional(
+                    indexing_element.type,
+                    offset_condition,
+                    lambda: self.operation(
+                        arith.AddIOp,
+                        indexing_element.type,
+                        indexing_element.result,
+                        dimension_variable.result,
+                    ),
+                    lambda: indexing_element,
+                )
+
+            if self.configuration.dynamic_indexing_check_out_of_bound:
+                dimension_variable = self.constant(dimension_variable_type, dimension)
+                if indexing_element.bit_width < dimension_variable.bit_width:
+                    indexing_element = self.operation(
+                        arith.ExtSIOp, dimension_variable_type, indexing_element.result
+                    )
+
+                def warn_out_of_memory_access():
+                    pred_ids = [
+                        pred.properties["id"]
+                        for pred in self.graph.ordered_preds_of(self.converting)
+                    ]
+                    operation_string = self.converting.format(pred_ids)
+                    tracing.TraceMessageOp(
+                        msg=(
+                            f"Runtime Warning: Index out of range on "
+                            f"\"{self.converting.properties['id']} = {operation_string}\"\n"
+                        )
+                    )
+
+                indexing_element_too_large_condition = self.operation(
+                    arith.CmpIOp,
+                    self.i(1),
+                    self.attribute(self.i(64), 5),  # signed greater than or equal
+                    indexing_element.result,
+                    dimension_variable.result,
+                )
+
+                self.conditional(
+                    None,
+                    indexing_element_too_large_condition,
+                    warn_out_of_memory_access,
+                )
+
+                indexing_element_too_small_condition = self.operation(
+                    arith.CmpIOp,
+                    self.i(1),
+                    self.attribute(self.i(64), 2),  # signed less than
+                    indexing_element.result,
+                    self.constant(dimension_variable_type, 0).result,
+                )
+
+                self.conditional(
+                    None,
+                    indexing_element_too_small_condition,
+                    warn_out_of_memory_access,
+                )
+
+            indices.append(
+                self.operation(
+                    arith.IndexCastOp,
+                    self.tensor(self.index_type(), shape=indexing_element.shape),
+                    indexing_element.result,
+                ),
+            )
+
+        return self.operation(
+            tensor.ExtractOp,
+            resulting_type,
+            x.result,
+            tuple(indexing_element.result for indexing_element in indices),
+            original_bit_width=x.original_bit_width,
+        )
 
     def index_static(
         self,
@@ -2681,7 +2905,7 @@ class Context:
             maximum_trick_table += [i for i in range(2 ** (x_minus_y_dtype.bit_width - 1))]
             maximum_trick_table += [0] * 2 ** (x_minus_y_dtype.bit_width - 1)
         else:
-            maximum_trick_table += [i for i in range(2**x_minus_y_dtype.bit_width)]
+            maximum_trick_table += [i for i in range(2 ** x_minus_y_dtype.bit_width)]
 
         if x_minus_y_dtype.bit_width <= maximum_input_bit_width:
             return self.minimum_maximum_with_trick(
@@ -2804,7 +3028,7 @@ class Context:
             for value in range(-(2 ** (x_minus_y_dtype.bit_width - 1)), 0):
                 minimum_trick_table.append(value)
         else:
-            minimum_trick_table += [0] * 2**x_minus_y_dtype.bit_width
+            minimum_trick_table += [0] * 2 ** x_minus_y_dtype.bit_width
 
         if x_minus_y_dtype.bit_width <= maximum_input_bit_width:
             return self.minimum_maximum_with_trick(
@@ -2956,12 +3180,12 @@ class Context:
 
             if optimize:
                 if on.is_unsigned:
-                    tables = [table[: 2**on.original_bit_width] for table in tables]
+                    tables = [table[: 2 ** on.original_bit_width] for table in tables]
                 else:
                     tables = [
                         (
                             table[: 2 ** (on.original_bit_width - 1)]
-                            + table[-(2 ** (on.original_bit_width - 1)) :]
+                            + table[-(2 ** (on.original_bit_width - 1)):]
                         )
                         for table in tables
                     ]
@@ -2975,10 +3199,10 @@ class Context:
         assert mapping.max() == len(tables) - 1
 
         for table in tables:
-            assert len(table) == 2**on.bit_width
+            assert len(table) == 2 ** on.bit_width
 
         mapping_shape = mapping.shape
-        tables_shape = (len(tables), 2**on.bit_width)
+        tables_shape = (len(tables), 2 ** on.bit_width)
 
         mapping = self.constant(self.tensor(self.index_type(), shape=mapping_shape), mapping)
         tables = self.constant(self.tensor(self.i(64), shape=tables_shape), tables)
@@ -3102,7 +3326,7 @@ class Context:
                 packed_chunk_and_sign,
                 [
                     (x << chunk_start) if x >> chunk_size == 0 else 0
-                    for x in range(2**intermediate_type.bit_width)
+                    for x in range(2 ** intermediate_type.bit_width)
                 ],
             )
 
@@ -3120,13 +3344,7 @@ class Context:
         if input_shape == output_shape:
             return x
 
-        resulting_type = self.typeof(
-            ValueDescription(
-                dtype=Integer(is_signed=x.is_signed, bit_width=x.bit_width),
-                shape=output_shape,
-                is_encrypted=x.is_encrypted,
-            )
-        )
+        resulting_type = self.tensor(self.element_typeof(x), shape)
 
         # we can either collapse or expand, which changes the number of dimensions
         # this is a limitation of the current compiler, it will be improved in the future (#1060)
@@ -3285,8 +3503,8 @@ class Context:
                 delta_precision = highest_supported_precision - x.type.bit_width
                 full_precision = x.type.bit_width + delta_precision
                 half_in_extra_precision = (
-                    1 << (delta_precision - 1)
-                ) - 1  # slightly smaller then half
+                                              1 << (delta_precision - 1)
+                                          ) - 1  # slightly smaller then half
                 half_in_extra_precision = self.constant(
                     self.i(full_precision + 1), half_in_extra_precision
                 )
@@ -3331,23 +3549,23 @@ class Context:
                     # this is oriented for precision higher than 3
                     # it will work with smaller precision but with more invasive effects
                     prevent_overflow_positive = (
-                        # pre-overflow
-                        [0] * used_positive_size
-                        # overflow part
-                        + [3 * full_decrease_by // 4, full_decrease_by]
-                        # unused
-                        + [0] * (positive_size - used_positive_size - 2)
-                    )[:half_tlu_size]
+                                                    # pre-overflow
+                                                    [0] * used_positive_size
+                                                    # overflow part
+                                                    + [3 * full_decrease_by // 4, full_decrease_by]
+                                                    # unused
+                                                    + [0] * (positive_size - used_positive_size - 2)
+                                                )[:half_tlu_size]
                     prevent_overflow = prevent_overflow_positive + [0] * negative_size
                 else:
                     prevent_overflow = (
-                        # pre-overflow
-                        [0] * half_tlu_size
-                        # overflow part
-                        + [3 * full_decrease_by // 4, full_decrease_by]
-                        # unused
-                        + [0] * (half_tlu_size - 2)
-                    )[: 2 * half_tlu_size]
+                                           # pre-overflow
+                                           [0] * half_tlu_size
+                                           # overflow part
+                                           + [3 * full_decrease_by // 4, full_decrease_by]
+                                           # unused
+                                           + [0] * (half_tlu_size - 2)
+                                       )[: 2 * half_tlu_size]
                 signed_type = self.to_signed(x).type
                 overflow_cancel = self.reinterpret(
                     self.tlu(
@@ -3472,7 +3690,7 @@ class Context:
                     is_encrypted=False,
                 )
             )
-            shift_multiplier = self.constant(shift_multiplier_type, 2**b.original_bit_width)
+            shift_multiplier = self.constant(shift_multiplier_type, 2 ** b.original_bit_width)
 
             shifted_x = self.mul(
                 self.tensor(intermediate_scalar_type, x.shape),
@@ -3490,8 +3708,8 @@ class Context:
                 packed_x_and_b,
                 [
                     (x_value << b_value) if orientation == "left" else (x_value >> b_value)
-                    for x_value in range(2**x.original_bit_width)
-                    for b_value in range(2**b.original_bit_width)
+                    for x_value in range(2 ** x.original_bit_width)
+                    for b_value in range(2 ** b.original_bit_width)
                 ],
             )
 
@@ -3516,12 +3734,12 @@ class Context:
         # y = x - (b & 0b1000 > 0) * (x - (x >> 8))
 
         for i in reversed(range(b.original_bit_width)):
-            to_check = 2**i
+            to_check = 2 ** i
 
             shifter = (
-                [(x << to_check) - x for x in range(2**x.original_bit_width)]
+                [(x << to_check) - x for x in range(2 ** x.original_bit_width)]
                 if orientation == "left"
-                else [x - (x >> to_check) for x in range(2**x.original_bit_width)]
+                else [x - (x >> to_check) for x in range(2 ** x.original_bit_width)]
             )
             shifter_dtype = Integer.that_can_represent(shifter)
 
@@ -3532,21 +3750,21 @@ class Context:
             should_shift = self.tlu(
                 self.tensor(packing_scalar_type, b.shape),
                 b,
-                [int((b & to_check) > 0) for b in range(2**b.original_bit_width)],
+                [int((b & to_check) > 0) for b in range(2 ** b.original_bit_width)],
             )
 
             chunks = []
             for offset in range(0, original_resulting_bit_width, chunk_size):
                 bits_to_process = min(chunk_size, original_resulting_bit_width - offset)
                 right_shift_by = original_resulting_bit_width - offset - bits_to_process
-                mask = (2**bits_to_process) - 1
+                mask = (2 ** bits_to_process) - 1
 
                 chunk_x = self.tlu(
                     self.tensor(packing_scalar_type, x.shape),
                     x,
                     [
                         (((shifter[x] >> right_shift_by) & mask) << 1)
-                        for x in range(2**x.original_bit_width)
+                        for x in range(2 ** x.original_bit_width)
                     ],
                 )
                 packed_chunk_x_and_should_shift = self.add(
@@ -3560,7 +3778,7 @@ class Context:
                     packed_chunk_x_and_should_shift,
                     [
                         (x << right_shift_by) if b else 0
-                        for x in range(2**chunk_size)
+                        for x in range(2 ** chunk_size)
                         for b in [0, 1]
                     ],
                 )
@@ -3678,7 +3896,10 @@ class Context:
         )
 
         return self.operation(
-            _FromElementsOp, resulting_type, x.result, original_bit_width=x.original_bit_width
+            _FromElementsOp,
+            resulting_type,
+            x.result,
+            original_bit_width=x.original_bit_width,
         )
 
     def tlu(self, resulting_type: ConversionType, on: Conversion, table: Sequence[int]):
@@ -3716,13 +3937,13 @@ class Context:
             )
 
             if optimize:
-                if len(table) != 2**on.original_bit_width:
+                if len(table) != 2 ** on.original_bit_width:
                     if on.is_unsigned:
-                        table = table[: 2**on.original_bit_width]
+                        table = table[: 2 ** on.original_bit_width]
                     else:
                         table = (
                             table[: 2 ** (on.original_bit_width - 1)]
-                            + table[-(2 ** (on.original_bit_width - 1)) :]  # type: ignore
+                            + table[-(2 ** (on.original_bit_width - 1)):]  # type: ignore
                         )
 
                 on = self.cast_to_original_bit_width(on)
@@ -3737,7 +3958,7 @@ class Context:
                 result = self.add(resulting_type, result, constant)
             return result
 
-        table += [0] * ((2**on.bit_width) - len(table))
+        table += [0] * ((2 ** on.bit_width) - len(table))
 
         dialect = fhe if on.is_scalar else fhelinalg
         operation = dialect.ApplyLookupTableEintOp

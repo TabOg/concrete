@@ -777,6 +777,16 @@ class Tracer:
 
         reject = False
         for indexing_element in index:
+            if isinstance(indexing_element, Tracer):
+                if not indexing_element.output.is_scalar:
+                    is_fancy = True
+
+                reject = (
+                    reject
+                    or indexing_element.output.is_encrypted
+                )
+                continue
+
             if isinstance(indexing_element, list):
                 try:
                     indexing_element = np.array(indexing_element)
@@ -784,7 +794,9 @@ class Tracer:
                     reject = True
                     break
 
-            if isinstance(indexing_element, np.ndarray):
+            if isinstance(indexing_element, np.ndarray) or (
+                isinstance(indexing_element, Tracer) and not indexing_element.output.is_scalar
+            ):
                 is_fancy = True
                 reject = not np.issubdtype(indexing_element.dtype, np.integer)
                 continue
@@ -826,7 +838,49 @@ class Tracer:
             raise ValueError(message)
 
         output_value = deepcopy(self.output)
-        output_value.shape = np.zeros(output_value.shape)[index].shape  # type: ignore
+
+        sample_index = []
+        for indexing_element in index:
+            sample_index.append(
+                np.zeros(indexing_element.shape, dtype=np.int64)
+                if isinstance(indexing_element, Tracer)
+                else indexing_element
+            )
+
+        output_value.shape = np.zeros(output_value.shape)[tuple(sample_index)].shape  # type: ignore
+
+        if any(isinstance(indexing_element, Tracer) for indexing_element in index):
+            dynamic_indices = []
+            static_indices = []
+
+            for indexing_element in index:
+                if isinstance(indexing_element, Tracer):
+                    static_indices.append(None)
+                    dynamic_indices.append(indexing_element)
+                else:
+                    static_indices.append(indexing_element)
+
+            def index_dynamic_evaluator(tensor, *dynamic_indices, static_indices):
+                final_indices = []
+
+                cursor = 0
+                for index in static_indices:
+                    if index is None:
+                        final_indices.append(dynamic_indices[cursor])
+                        cursor += 1
+                    else:
+                        final_indices.append(index)
+
+                return tensor[tuple(final_indices)]
+
+            computation = Node.generic(
+                "index_dynamic",
+                [deepcopy(self.output)] + [deepcopy(index.output) for index in dynamic_indices],
+                output_value,
+                index_dynamic_evaluator,
+                kwargs={"static_indices": static_indices},
+            )
+            return Tracer(computation, [self] + [index for index in dynamic_indices])
 
         computation = Node.generic(
             "index_static",

@@ -1159,12 +1159,12 @@ def FHELinalg_ConcatOp : FHELinalg_Op<"concat", [Pure]> {
     }];
 
     let arguments = (ins
-        Variadic<Type<And<[TensorOf<[FHE_AnyEncryptedInteger]>.predicate, HasStaticShapePred]>>>:$ins,
+        Variadic<Type<And<[TensorOf<[AnyType]>.predicate, HasStaticShapePred]>>>:$ins,
         DefaultValuedAttr<I64Attr, "0">:$axis
     );
 
     let results = (outs
-        Type<And<[TensorOf<[FHE_AnyEncryptedInteger]>.predicate, HasStaticShapePred]>>:$out
+        Type<And<[TensorOf<[AnyType]>.predicate, HasStaticShapePred]>>:$out
     );
 
     let hasVerifier = 1;
