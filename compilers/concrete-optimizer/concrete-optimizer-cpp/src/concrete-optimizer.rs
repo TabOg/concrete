@@ -547,16 +547,22 @@ impl Dag {
         self.0.get_circuit_count()
     }
 
-    fn add_compositions(&mut self, froms: &[ffi::OperatorIndex], tos: &[ffi::OperatorIndex]) {
-        self.0.add_compositions(
-            froms
-                .iter()
-                .map(|a| OperatorIndex(a.index))
-                .collect::<Vec<_>>(),
-            tos.iter()
-                .map(|a| OperatorIndex(a.index))
-                .collect::<Vec<_>>(),
-        );
+    unsafe fn add_composition<'a>(&mut self, rule: ffi::CompositionRule<'a>) {
+        let from_index = self
+            .0
+            .get_circuit(rule.from_func.to_str().unwrap())
+            .get_input_operators_iter()
+            .nth(rule.from_pos)
+            .unwrap()
+            .id;
+        let to_index = self
+            .0
+            .get_circuit(rule.to_func.to_str().unwrap())
+            .get_input_operators_iter()
+            .nth(rule.to_pos)
+            .unwrap()
+            .id;
+        self.0.add_composition(from_index, to_index);
     }
 
     fn optimize_multi(&self, options: ffi::Options) -> ffi::CircuitSolution {
@@ -786,7 +792,7 @@ mod ffi {
 
         fn optimize(self: &Dag, options: Options) -> DagSolution;
 
-        fn add_compositions(self: &mut Dag, froms: &[OperatorIndex], tos: &[OperatorIndex]);
+        unsafe fn add_composition<'a>(self: &mut Dag, rule: CompositionRule<'a>);
 
         #[namespace = "concrete_optimizer::dag"]
         fn dump(self: &CircuitSolution) -> String;
@@ -871,6 +877,15 @@ mod ffi {
     pub enum MultiParamStrategy {
         ByPrecision,
         ByPrecisionAndNorm2,
+    }
+
+    #[namespace = "concrete_optimizer"]
+    #[derive(Debug, Clone, Copy)]
+    pub struct CompositionRule<'a> {
+        pub from_func: &'a CxxString,
+        pub from_pos: usize,
+        pub to_func: &'a CxxString,
+        pub to_pos: usize,
     }
 
     #[namespace = "concrete_optimizer"]
