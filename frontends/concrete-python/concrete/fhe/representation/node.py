@@ -239,13 +239,11 @@ class Node:
                 # if it fails we raise the exception below
                 pass
 
-        # avoid circular import
-        from ..tfhers.values import TFHERSInteger
-
         result_is_well_typed = isinstance(result, (np.bool_, np.integer, np.floating, np.ndarray))
         # it's only allowed to have them in input nodes
+        # we don't use isinstance to avoid a cyclic import
         result_is_acceptable_if_tfhers = (
-            not isinstance(result, TFHERSInteger) or self.operation == Operation.Input
+            not type(result).__name__ == "TFHERSInteger" or self.operation == Operation.Input
         )
         if not result_is_well_typed and not result_is_acceptable_if_tfhers:
             message = (

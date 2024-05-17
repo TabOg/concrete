@@ -124,7 +124,8 @@ class Context:
             # However it is part of the result type
             carry_width = value.dtype.carry_width
             assert bit_width % msg_width == 0
-            # we need ct_shape ct of msg_width (+ carry_width) bits to represent a ct of bit_width bits
+            # we need ct_shape ct of msg_width (+ carry_width) bits to represent
+            # a single ct of bit_width bits
             ct_shape = (bit_width // msg_width,)
             # we add the dimension of ciphertexts at the end (old_dims..., ct_shape)
             shape = value.shape + ct_shape

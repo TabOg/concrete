@@ -6,13 +6,11 @@ import numpy as np
 from .dtypes import TFHERSIntegerType, int8_2_2, int16_2_2, uint8_2_2, uint16_2_2
 
 
-# TODO: maybe merge the integer and the type with the type having an optional param value
 class TFHERSInteger:
     _value: Union[int, np.ndarray]
     _dtype: TFHERSIntegerType
     _shape: tuple
 
-    # TODO: the value might need access to crypto parameters to compute the type and shape
     def __init__(
         self,
         dtype: TFHERSIntegerType,
@@ -44,15 +42,12 @@ class TFHERSInteger:
 
     @property
     def dtype(self) -> TFHERSIntegerType:
-        # type has to return the type of a single ct after encoding, not the TFHERS type
         return self._dtype
 
     @property
     def shape(self) -> tuple:
-        # shape has to return the shape considering encoding
         return self._shape
 
-    # TODO: maybe we should return encoded values (radix)
     @property
     def value(self) -> Union[int, np.ndarray]:
         return self._value
