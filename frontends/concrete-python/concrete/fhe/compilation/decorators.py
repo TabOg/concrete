@@ -14,7 +14,7 @@ from .artifacts import DebugArtifacts
 from .circuit import Circuit
 from .compiler import Compiler, EncryptionStatus
 from .configuration import Configuration
-from .module_compiler import FunctionDef, ModuleCompiler
+from .module_compiler import CompositionPolicy, FunctionDef, ModuleCompiler, NotComposable
 
 
 def circuit(
@@ -179,7 +179,8 @@ def module():
         if not functions:
             error = "Tried to define an @fhe.module without any @fhe.function"
             raise RuntimeError(error)
-        return ModuleCompiler([f for (_, f) in functions])
+        composition = getattr(class_, "composition", CompositionPolicy(NotComposable()))
+        return ModuleCompiler([f for (_, f) in functions], composition)
 
     return decoration
 

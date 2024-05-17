@@ -428,3 +428,66 @@ def test_key_set():
         x_enc = module.inc.run(x_enc)
     x_dec = module.inc.decrypt(x_enc)
     assert x_dec == 15
+
+
+def test_composition_policy_default():
+
+    @fhe.module()
+    class Module:
+        @fhe.function({"x": "encrypted"})
+        def square(x):
+            return x**2
+
+        @fhe.function({"x": "encrypted", "y": "encrypted"})
+        def add_sub(x, y):
+            return (x + y), (x - y)
+
+        @fhe.function({"x": "encrypted", "y": "encrypted"})
+        def mul(x, y):
+            return x * y
+
+    assert(isinstance(Module.composition, fhe.CompositionPolicy))
+    assert(isinstance(Module.composition.policy, fhe.NotComposable))
+
+def test_composition_policy_all_composable():
+
+    @fhe.module()
+    class Module:
+        @fhe.function({"x": "encrypted"})
+        def square(x):
+            return x**2
+
+        @fhe.function({"x": "encrypted", "y": "encrypted"})
+        def add_sub(x, y):
+            return (x + y), (x - y)
+
+        @fhe.function({"x": "encrypted", "y": "encrypted"})
+        def mul(x, y):
+            return x * y
+
+        composition = fhe.CompositionPolicy(fhe.ModuleComposable())
+
+    assert(isinstance(Module.composition, fhe.CompositionPolicy))
+    assert(isinstance(Module.composition.policy, fhe.ModuleComposable))
+
+
+def test_composition_policy_wires():
+    from concrete.fhe import CompositionPolicy, Wired, Wire, Input, Output, AllInputs, AllOutputs
+
+    @fhe.module()
+    class Module:
+        @fhe.function({"x": "encrypted"})
+        def square(x):
+            return x**2
+
+        @fhe.function({"x": "encrypted", "y": "encrypted"})
+        def add_sub(x, y):
+            return (x + y), (x - y)
+
+        composition = CompositionPolicy(Wired([
+            Wire(AllOutputs(add_sub), AllInputs(add_sub)),
+            Wire(AllOutputs(add_sub), Input(square, 0))
+        ]))
+
+    assert(isinstance(Module.composition, fhe.CompositionPolicy))
+    assert(isinstance(Module.composition.policy, fhe.Wired))

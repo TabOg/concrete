@@ -8,7 +8,7 @@ import inspect
 import traceback
 from copy import deepcopy
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union, NamedTuple
 
 import numpy as np
 from concrete.compiler import CompilationContext
@@ -234,6 +234,62 @@ class FunctionDef:
         self.inputset.append(sample)
         return self.graph(*args)
 
+class NotComposable():
+    """
+    Composition policy that does not allow the forwarding of any output to any input.
+    """
+    pass
+
+class ModuleComposable():
+    """
+    Composition policy that allows to forward any output of the module to any of its input.
+    """
+    pass
+
+class Output(NamedTuple):
+    """
+    The output of a given function of a module.
+    """
+    func: FunctionDef
+    pos: int
+
+class AllOutputs(NamedTuple):
+    """
+    All the outputs of a given function of a module.
+    """
+    func: FunctionDef
+
+class Input(NamedTuple):
+    """
+    The input of a given function of a module.
+    """
+    func: FunctionDef
+    pos: int
+
+class AllInputs(NamedTuple):
+    """
+    All the inputs of a given function of a module.
+    """
+    func: FunctionDef
+
+class Wire(NamedTuple):
+    """
+    A forwarding rule between an output and an input.
+    """
+    output: Union[Output, AllOutputs]
+    input: Union[Input, AllInputs]
+
+class Wired(NamedTuple):
+    """
+    Composition policy which allows the forwarding of certain outputs to certain inputs.
+    """
+    wires: List[Wire]
+
+class CompositionPolicy(NamedTuple):
+    """
+    What policy to use to compose the module functions.
+    """
+    policy: Union[NotComposable, ModuleComposable, Wired]
 
 class DebugManager:
     """
@@ -450,8 +506,9 @@ class ModuleCompiler:
     default_configuration: Configuration
     functions: Dict[str, FunctionDef]
     compilation_context: CompilationContext
+    composition: CompositionPolicy
 
-    def __init__(self, functions: List[FunctionDef]):
+    def __init__(self, functions: List[FunctionDef], composition: CompositionPolicy):
         self.default_configuration = Configuration(
             p_error=0.00001,
             composable=True,
@@ -459,6 +516,7 @@ class ModuleCompiler:
         )
         self.functions = {function.name: function for function in functions}
         self.compilation_context = CompilationContext.new()
+        self.composition = composition
 
     def compile(
         self,

@@ -21,7 +21,19 @@ from .configuration import (
 )
 from .keys import Keys
 from .module import FheFunction, FheModule
-from .module_compiler import FunctionDef, ModuleCompiler
+from .module_compiler import (
+    FunctionDef,
+    ModuleCompiler,
+    CompositionPolicy,
+    NotComposable,
+    ModuleComposable,
+    Wired,
+    Wire,
+    Input,
+    AllInputs,
+    Output,
+    AllOutputs
+)
 from .server import Server
 from .specs import ClientSpecs
 from .utils import inputset

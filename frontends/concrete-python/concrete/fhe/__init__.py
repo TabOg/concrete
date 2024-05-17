@@ -30,6 +30,15 @@ from .compilation import (
     Server,
     Value,
     inputset,
+    CompositionPolicy,
+    ModuleComposable,
+    NotComposable,
+    Wired,
+    Wire,
+    Input,
+    AllInputs,
+    Output,
+    AllOutputs
 )
 from .compilation.decorators import circuit, compiler, function, module
 from .dtypes import Integer
