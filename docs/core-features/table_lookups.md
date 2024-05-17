@@ -1,28 +1,36 @@
 # Table lookups
+This document explains the use of table lookups (TLUs) in Concrete, covering creation, exactness, and performance, and the configuration options to manage error probabilities and improve efficiency.
 
-One of the most common operations in **Concrete** are `Table Lookups` (TLUs). All operations except addition, subtraction, multiplication with non-encrypted values, tensor manipulation operations, and a few operations built with those primitive operations (e.g. matmul, conv) are converted to Table Lookups under the hood.
+Table lookups (TLUs) are one of the most common operations in **Concrete**. Most operations are converted to TLUs under the hood, except:
+- Addition
+- Subtraction
+- Multiplication with non-encrypted values
+- Tensor manipulation
+- Other operations built from these primitives, such as matmul, conv. and so on.
 
-Table Lookups are very flexible. They allow Concrete to support many operations, but they are expensive. The exact cost depends on many variables (hardware used, error probability, etc.), but they are always much more expensive compared to other operations. You should try to avoid them as much as possible. It's not always possible to avoid them completely, but you might remove the number of TLUs or replace some of them with other primitive operations.
+Table lookups are very flexible, enabling **Concrete** to support a wide range of operations. However, TLUs are always much more expensive than other operations, even though the exact cost depends on many variables, such as hardware used and error probability.
+
+Therefore, when feasible, you should reducing the number of TLUs or replace some of them with other primitive operations.
 
 {% hint style="info" %}
-Concrete automatically parallelizes TLUs if they are applied to tensors.
+**Concrete** automatically parallelizes TLUs when applied to tensors.
 {% endhint %}
 
 ## Direct table lookup
 
-**Concrete** provides a `LookupTable` class to create your own tables and apply them in your circuits.
+**Concrete** provides a `LookupTable` class that allows you to create your own tables and apply them in your circuits.
 
 {% hint style="info" %}
-`LookupTable`s can have any number of elements. Let's call the number of elements **N**. As long as the lookup variable is within the range \[-**N**, **N**), the Table Lookup is valid.
+`LookupTable` can have any number of elements, denoted as  **N**. The table lookup is valid if the lookup variable is within the range [-N, N). 
 
-If you go outside of this range, you will receive the following error:
+If the lookup variable is outside this range, you will receive the following error:
 
 ```
 IndexError: index 10 is out of bounds for axis 0 with size 6
 ```
 {% endhint %}
 
-### With scalars.
+### With scalars
 
 You can create the lookup table using a list of integers and apply it using indexing:
 
@@ -44,7 +52,7 @@ assert circuit.encrypt_run_decrypt(2) == table[2] == 3
 assert circuit.encrypt_run_decrypt(3) == table[3] == 0
 ```
 
-### With tensors.
+### With tensors
 
 When you apply a table lookup to a tensor, the scalar table lookup is applied to each element of the tensor:
 
@@ -76,7 +84,7 @@ for i in range(2):
         assert actual_output[i][j] == expected_output[i][j] == table[sample[i][j]]
 ```
 
-### With negative values.
+### With negative values
 
 `LookupTable` mimics array indexing in Python, which means if the lookup variable is negative, the table is looked up from the back:
 
@@ -100,7 +108,7 @@ assert circuit.encrypt_run_decrypt(4) == table[-4] == 2
 
 ## Direct multi-table lookup
 
-If you want to apply a different lookup table to each element of a tensor, you can have a `LookupTable` of `LookupTable`s:
+To apply a different lookup table to each element of a tensor, you can have a `LookupTable` of `LookupTable`s:
 
 ```python
 from concrete import fhe
@@ -146,7 +154,7 @@ In this example, we applied a `squared` table to the first column and a `cubed` 
 
 ## Fused table lookup
 
-**Concrete** tries to fuse some operations into table lookups automatically so that lookup tables don't need to be created manually:
+**Concrete** can automatically fuse some operations into table lookups so that you don't have to create lookup tables manually:
 
 ```python
 from concrete import fhe
@@ -164,7 +172,7 @@ for x in range(8):
 ```
 
 {% hint style="info" %}
-All lookup tables need to be from integers to integers. So, without `.astype(np.int64)`, **Concrete** will not be able to fuse.
+All lookup tables must be from integers to integers. Without `.astype(np.int64)`, **Concrete** will not be able to fuse.
 {% endhint %}
 
 The function is first traced into:
@@ -176,41 +184,47 @@ The function is first traced into:
 ![](../\_static/tutorials/table-lookup/3.final.graph.png)
 
 {% hint style="info" %}
-Fusing makes the code more readable and easier to modify, so try to utilize it over manual `LookupTable`s as much as possible.
+Fusing makes the code more readable and easier to modify, so try to use it instead of manual `LookupTable`s whenever possible.
 {% endhint %}
 
 ## Using automatically created table lookup
 
-We refer the users to [this page](extensions.md) for explanations about `fhe.univariate(function)` and `fhe.multivariate(function)` features, which are convenient ways to use automatically created table lookup.
+For explanations about the `fhe.univariate(function)` and `fhe.multivariate(function)` features, which are convenient ways to use automatically created table lookups, refer to [this page](extensions.md).
 
 ## Table lookup exactness
 
-TLUs are performed with an FHE operation called `Programmable Bootstrapping` (PBS). PBSs have a certain probability of error: when these errors happen, it results in inaccurate results.
+TLUs are performed with an FHE operation called `Programmable Bootstrapping` (PBS). PBSs have a certain probability of error, which can result in inaccurate results.
 
-Let's say you have the table:
+Consider the following table:
 
 ```python
 lut = [0, 1, 4, 9, 16, 25, 36, 49, 64]
 ```
 
-And you perform a Table Lookup using `4`. The result you should get is `lut[4] = 16`, but because of the possibility of error, you could get any other value in the table.
+If you perform a Table Lookup using `4`, the expected result is `lut[4] = 16`. However, due to the possibility of error, you could receive any other value in the table.
 
-The probability of this error can be configured through the `p_error` and `global_p_error` configuration options. The difference between these two options is that, `p_error` is for individual TLUs but `global_p_error` is for the whole circuit.
+The probability of this error can be configured using the `p_error` and `global_p_error` configuration options:
+- `p_error` applies to individual TLUs
+- `global_p_error` applies to the whole circuit
 
-If you set `p_error` to `0.01`, for example, it means every TLU in the circuit will have a 99% chance (or more) of being exact. If there is a single TLU in the circuit, it corresponds to `global_p_error = 0.01` as well. But if we have 2 TLUs, then `global_p_error` would be higher: that's `1 - (0.99 * 0.99) ~= 0.02 = 2%`.
+For example, if you set `p_error` to `0.01`, each TLU in the circuit will have a 99% (or greater) chance of being exact. With only one TLU in the circuit, it corresponds to `global_p_error = 0.01`. However, with two TLUs, `global_p_error` would be higher: `1 - (0.99 * 0.99) ≈ 0.02 = 2%`.
 
-If you set `global_p_error` to `0.01`, the whole circuit will have at most 1% probability of error, no matter how many Table Lookups are included (which means that `p_error` will be smaller than `0.01` if there are more than a single TLU).
+Setting `global_p_error` to `0.01` ensures that the entire circuit will have at most a `1%` probability of error, regardless of the number of TLUs. In this case, `p_error` will be smaller than `0.01` if there is more than one TLU.
 
-If you set both of them, both will be satisfied. Essentially, the stricter one will be used.
+If both `p_error` and `global_p_error` are set, the stricter condition will apply.
 
-By default, both `p_error` and `global_p_error` are set to `None`, which results in a `global_p_error` of `1 / 100_000` being used.
+By default, both `p_error` and `global_p_error` are set to `None`, resulting in a `global_p_error` of `1 / 100_000` as default.
 
-Feel free to play with these configuration options to pick the one best suited for your needs! See [How to Configure](../guides/configure.md) to learn how you can set a custom `p_error` and/or `global_p_error`.
+You can adjust these configuration options to suit your needs. See [How to Configure](../guides/configure.md) to learn how you can set a custom `p_error` and/or `global_p_error`.
 
 {% hint style="info" %}
-Configuring either of those variables impacts compilation and execution times (compilation, keys generation, circuit execution) and space requirements (size of the keys on disk and in memory). Lower error probabilities result in longer compilation and execution times and larger space requirements.
+Configuring these variables have significant impact: 
+- **Compilation and execution times**: compilation, key generation, circuit execution
+- **Space requirements**: key sizes on disk and in memory.
+
+In general, lower error probabilities result in longer compilation and execution times and larger space requirements.
 {% endhint %}
 
 ## Table lookup performance
 
-PBSs are very expensive, in terms of computations. Fortunately, it is sometimes possible to replace PBS by [rounded PBS](rounding.md), [truncate PBS](truncating.md) or even [approximate PBS](rounding.md). These TLUs have a slightly different semantic, but are very useful in cases like machine learning for more efficiency without drop of accuracy.
+PBSs are computationally expensive. To optimize the performance, in some cases you can replace PBS by [rounded PBS](rounding.md), [truncate PBS](truncating.md) or [approximate PBS](rounding.md). With lightly different semantics, these TLUs offer more efficiency without sacrificing accuracy, which can very useful in cases like machine learning.
