@@ -566,8 +566,7 @@ class ModuleCompiler:
     def __init__(self, functions: List[FunctionDef], composition: CompositionPolicy):
         self.default_configuration = Configuration(
             p_error=0.00001,
-            composable=True,
-            parameter_selection_strategy="v0",
+            parameter_selection_strategy="multi",
         )
         self.functions = {function.name: function for function in functions}
         self.compilation_context = CompilationContext.new()
@@ -605,9 +604,6 @@ class ModuleCompiler:
         configuration = deepcopy(configuration)
         if len(kwargs) != 0:
             configuration = configuration.fork(**kwargs)
-        if not configuration.composable:
-            error = "Module can only be compiled with `composable` activated."
-            raise RuntimeError(error)
 
         module_artifacts = (
             module_artifacts if module_artifacts is not None else ModuleDebugArtifacts()

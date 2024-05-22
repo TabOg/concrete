@@ -508,7 +508,6 @@ cmdlineCompilationOptions() {
       cmdline::optimizerMultiParamStrategy;
   options.optimizerConfig.encoding = cmdline::optimizerEncoding;
   options.optimizerConfig.cache_on_disk = !cmdline::optimizerNoCacheOnDisk;
-  options.optimizerConfig.composable = cmdline::optimizerAllowComposition;
 
   if (!std::isnan(options.optimizerConfig.global_p_error) &&
       options.optimizerConfig.strategy == optimizer::Strategy::V0) {

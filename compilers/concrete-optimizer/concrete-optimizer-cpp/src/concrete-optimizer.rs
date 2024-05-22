@@ -558,7 +558,7 @@ impl Dag {
         let from_index = self
             .0
             .get_circuit(from_func.to_str().unwrap())
-            .get_input_operators_iter()
+            .get_output_operators_iter()
             .nth(from_pos)
             .unwrap()
             .id;
