@@ -946,7 +946,6 @@ namespace concrete_optimizer {
   struct Weights;
   enum class Encoding : ::std::uint8_t;
   enum class MultiParamStrategy : ::std::uint8_t;
-  struct CompositionRule;
   struct Options;
   namespace dag {
     struct OperatorIndex;
@@ -973,7 +972,7 @@ struct Dag final : public ::rust::Opaque {
   ::rust::Box<::concrete_optimizer::DagBuilder> builder(::rust::String circuit) noexcept;
   ::rust::String dump() const noexcept;
   ::concrete_optimizer::dag::DagSolution optimize(::concrete_optimizer::Options options) const noexcept;
-  void add_composition(::concrete_optimizer::CompositionRule rule) noexcept;
+  void add_composition(::std::string const &from_func, ::std::size_t from_pos, ::std::string const &to_func, ::std::size_t to_pos) noexcept;
   ::std::size_t get_circuit_count() const noexcept;
   ::concrete_optimizer::dag::CircuitSolution optimize_multi(::concrete_optimizer::Options options) const noexcept;
   ::rust::Vec<::concrete_optimizer::dag::OperatorIndex> get_input_indices() const noexcept;
@@ -1101,18 +1100,6 @@ enum class MultiParamStrategy : ::std::uint8_t {
   ByPrecisionAndNorm2 = 1,
 };
 #endif // CXXBRIDGE1_ENUM_concrete_optimizer$MultiParamStrategy
-
-#ifndef CXXBRIDGE1_STRUCT_concrete_optimizer$CompositionRule
-#define CXXBRIDGE1_STRUCT_concrete_optimizer$CompositionRule
-struct CompositionRule final {
-  ::std::string const &from_func;
-  ::std::size_t from_pos;
-  ::std::string const &to_func;
-  ::std::size_t to_pos;
-
-  using IsRelocatable = ::std::true_type;
-};
-#endif // CXXBRIDGE1_STRUCT_concrete_optimizer$CompositionRule
 
 #ifndef CXXBRIDGE1_STRUCT_concrete_optimizer$Options
 #define CXXBRIDGE1_STRUCT_concrete_optimizer$Options
@@ -1331,7 +1318,7 @@ void concrete_optimizer$cxxbridge1$DagBuilder$tag_operator_as_output(::concrete_
 
 void concrete_optimizer$cxxbridge1$Dag$optimize(::concrete_optimizer::Dag const &self, ::concrete_optimizer::Options options, ::concrete_optimizer::dag::DagSolution *return$) noexcept;
 
-void concrete_optimizer$cxxbridge1$Dag$add_composition(::concrete_optimizer::Dag &self, ::concrete_optimizer::CompositionRule rule) noexcept;
+void concrete_optimizer$cxxbridge1$Dag$add_composition(::concrete_optimizer::Dag &self, ::std::string const &from_func, ::std::size_t from_pos, ::std::string const &to_func, ::std::size_t to_pos) noexcept;
 } // extern "C"
 
 namespace dag {
@@ -1459,8 +1446,8 @@ void DagBuilder::tag_operator_as_output(::concrete_optimizer::dag::OperatorIndex
   return ::std::move(return$.value);
 }
 
-void Dag::add_composition(::concrete_optimizer::CompositionRule rule) noexcept {
-  concrete_optimizer$cxxbridge1$Dag$add_composition(*this, rule);
+void Dag::add_composition(::std::string const &from_func, ::std::size_t from_pos, ::std::string const &to_func, ::std::size_t to_pos) noexcept {
+  concrete_optimizer$cxxbridge1$Dag$add_composition(*this, from_func, from_pos, to_func, to_pos);
 }
 
 namespace dag {

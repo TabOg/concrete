@@ -16,6 +16,7 @@ use concrete_optimizer::optimization::decomposition;
 use concrete_optimizer::parameters::{BrDecompositionParameters, KsDecompositionParameters};
 use concrete_optimizer::utils::cache::persistent::default_cache_dir;
 use concrete_optimizer::utils::viz::Viz;
+use cxx::CxxString;
 
 fn no_solution() -> ffi::Solution {
     ffi::Solution {
@@ -547,19 +548,25 @@ impl Dag {
         self.0.get_circuit_count()
     }
 
-    unsafe fn add_composition<'a>(&mut self, rule: ffi::CompositionRule<'a>) {
+    unsafe fn add_composition<'a>(
+        &mut self,
+        from_func: &'a CxxString,
+        from_pos: usize,
+        to_func: &'a CxxString,
+        to_pos: usize,
+    ) {
         let from_index = self
             .0
-            .get_circuit(rule.from_func.to_str().unwrap())
+            .get_circuit(from_func.to_str().unwrap())
             .get_input_operators_iter()
-            .nth(rule.from_pos)
+            .nth(from_pos)
             .unwrap()
             .id;
         let to_index = self
             .0
-            .get_circuit(rule.to_func.to_str().unwrap())
+            .get_circuit(to_func.to_str().unwrap())
             .get_input_operators_iter()
-            .nth(rule.to_pos)
+            .nth(to_pos)
             .unwrap()
             .id;
         self.0.add_composition(from_index, to_index);
@@ -792,7 +799,13 @@ mod ffi {
 
         fn optimize(self: &Dag, options: Options) -> DagSolution;
 
-        unsafe fn add_composition<'a>(self: &mut Dag, rule: CompositionRule<'a>);
+        unsafe fn add_composition<'a>(
+            self: &mut Dag,
+            from_func: &'a CxxString,
+            from_pos: usize,
+            to_func: &'a CxxString,
+            to_pos: usize,
+        );
 
         #[namespace = "concrete_optimizer::dag"]
         fn dump(self: &CircuitSolution) -> String;
@@ -877,15 +890,6 @@ mod ffi {
     pub enum MultiParamStrategy {
         ByPrecision,
         ByPrecisionAndNorm2,
-    }
-
-    #[namespace = "concrete_optimizer"]
-    #[derive(Debug, Clone, Copy)]
-    pub struct CompositionRule<'a> {
-        pub from_func: &'a CxxString,
-        pub from_pos: usize,
-        pub to_func: &'a CxxString,
-        pub to_pos: usize,
     }
 
     #[namespace = "concrete_optimizer"]

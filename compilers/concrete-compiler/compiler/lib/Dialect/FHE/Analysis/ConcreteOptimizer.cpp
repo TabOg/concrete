@@ -977,15 +977,15 @@ std::unique_ptr<mlir::Pass> createDagPass(optimizer::Config config,
 void applyCompositionRules(optimizer::Config config,
                            concrete_optimizer::Dag &dag) {
 
-  if (config.composable) {
-    auto inputs = dag.get_input_indices();
-    auto outputs = dag.get_output_indices();
-    dag.add_compositions(
-        rust::Slice<const concrete_optimizer::dag::OperatorIndex>(
-            outputs.data(), outputs.size()),
-        rust::Slice<const concrete_optimizer::dag::OperatorIndex>(
-            inputs.data(), inputs.size()));
-  }
+  // if (config.composable) {
+  //   auto inputs = dag.get_input_indices();
+  //   auto outputs = dag.get_output_indices();
+  //   dag.add_compositions(
+  //       rust::Slice<const concrete_optimizer::dag::OperatorIndex>(
+  //           outputs.data(), outputs.size()),
+  //       rust::Slice<const concrete_optimizer::dag::OperatorIndex>(
+  //           inputs.data(), inputs.size()));
+  // }
 }
 
 } // namespace optimizer
