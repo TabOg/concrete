@@ -8,7 +8,7 @@ import inspect
 import traceback
 from copy import deepcopy
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union, NamedTuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union, NamedTuple, Protocol, runtime_checkable
 
 import numpy as np
 from concrete.compiler import CompilationContext
@@ -234,17 +234,54 @@ class FunctionDef:
         self.inputset.append(sample)
         return self.graph(*args)
 
+    @property
+    def inputs_count(self) -> int:
+        return self.graph.input_nodes.__len__()
+
+    @property
+    def outputs_count(self) -> int:
+        return self.graph.output_nodes.__len__()
+
+
+class CompositionRule(NamedTuple):
+    """
+    A raw composition rule.
+    """
+    from_func: str
+    from_pos: int
+    to_func: str
+    to_pos: int
+
+
+@runtime_checkable
+class CompositionPolicy(Protocol):
+    """
+    A protocol for composition policies.
+    """
+
+    def _get_rules_iter(self, funcs: List[FunctionDef]) -> Iterable[CompositionRule]:
+        pass
+
 class NotComposable():
     """
     Composition policy that does not allow the forwarding of any output to any input.
     """
-    pass
+
+    def _get_rules_iter(self, _funcs: List[FunctionDef]) -> Iterable[CompositionRule]:
+        return list()
 
 class ModuleComposable():
     """
     Composition policy that allows to forward any output of the module to any of its input.
     """
-    pass
+
+    def _get_rules_iter(self, funcs: List[FunctionDef]) -> Iterable[CompositionRule]:
+        import itertools as it
+        outputs = it.chain(*[zip(it.repeat(f.name), range(f.outputs_count)) for f in funcs])
+        inputs = it.chain(*[zip(it.repeat(f.name), range(f.inputs_count)) for f in funcs])
+        iter = it.product(outputs, inputs)
+        adapter = lambda x: CompositionRule(x[0][0], x[0][1], x[1][0], x[1][1])
+        return map(adapter, iter)
 
 class Output(NamedTuple):
     """
@@ -253,11 +290,18 @@ class Output(NamedTuple):
     func: FunctionDef
     pos: int
 
+    def _get_outputs_iter(self) -> Iterable[Tuple[str, int]]:
+        return [(self.func.name, self.pos)]
+
 class AllOutputs(NamedTuple):
     """
     All the outputs of a given function of a module.
     """
     func: FunctionDef
+
+    def _get_outputs_iter(self) -> Iterable[Tuple[str, int]]:
+        import itertools as it
+        return zip(it.repeat(self.func.name), range(self.func.outputs_count))
 
 class Input(NamedTuple):
     """
@@ -266,11 +310,18 @@ class Input(NamedTuple):
     func: FunctionDef
     pos: int
 
+    def _get_inputs_iter(self) -> Iterable[Tuple[str, int]]:
+        return [(self.func.name, self.pos)]
+
 class AllInputs(NamedTuple):
     """
     All the inputs of a given function of a module.
     """
     func: FunctionDef
+
+    def _get_inputs_iter(self) -> Iterable[Tuple[str, int]]:
+        import itertools as it
+        return zip(it.repeat(self.func.name), range(self.func.inputs_count))
 
 class Wire(NamedTuple):
     """
@@ -279,17 +330,21 @@ class Wire(NamedTuple):
     output: Union[Output, AllOutputs]
     input: Union[Input, AllInputs]
 
+    def _get_rules_iter(self, _):
+        import itertools as it
+        iter = it.product(self.output._get_outputs_iter(), self.input._get_inputs_iter())
+        adapter = lambda x: CompositionRule(x[0][0], x[0][1], x[1][0], x[1][1])
+        return map(adapter, iter)
+
 class Wired(NamedTuple):
     """
     Composition policy which allows the forwarding of certain outputs to certain inputs.
     """
     wires: List[Wire]
 
-class CompositionPolicy(NamedTuple):
-    """
-    What policy to use to compose the module functions.
-    """
-    policy: Union[NotComposable, ModuleComposable, Wired]
+    def _get_rules_iter(self, _):
+        import itertools as it
+        return it.chain(*[w._get_rules_iter(_) for w in self.wires])
 
 class DebugManager:
     """
@@ -592,7 +647,7 @@ class ModuleCompiler:
 
             # Compile to a module!
             with dbg.debug_table("Optimizer", activate=dbg.show_optimizer()):
-                output = FheModule(graphs, mlir_module, self.compilation_context, configuration)
+                output = FheModule(graphs, mlir_module, self.compilation_context, configuration, self.composition._get_rules_iter(list(self.functions.values())))
                 if isinstance(output.runtime, ExecutionRt):
                     client_parameters = output.runtime.client.specs.client_parameters
                     module_artifacts.add_client_parameters(client_parameters.serialize())

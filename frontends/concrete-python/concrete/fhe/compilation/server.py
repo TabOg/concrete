@@ -7,7 +7,7 @@ Declaration of `Server` class.
 import shutil
 import tempfile
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union, Iterable
 
 # mypy: disable-error-code=attr-defined
 import concrete.compiler
@@ -95,6 +95,7 @@ class Server:
         configuration: Configuration,
         is_simulated: bool = False,
         compilation_context: Optional[CompilationContext] = None,
+        composition_rules: Iterable[Tuple[str, int, str, int]] = list()
     ) -> "Server":
         """
         Create a server using MLIR and output sign information.
@@ -123,7 +124,8 @@ class Server:
         options.set_auto_parallelize(configuration.auto_parallelize)
         options.set_compress_evaluation_keys(configuration.compress_evaluation_keys)
         options.set_compress_input_ciphertexts(configuration.compress_input_ciphertexts)
-        options.set_composable(configuration.composable)
+        for rule in composition_rules:
+            options.add_composition(rule.from_func, rule.from_pos, rule.to_func, rule.to_pos)
 
         if configuration.auto_parallelize or configuration.dataflow_parallelize:
             # pylint: disable=c-extension-no-member,no-member

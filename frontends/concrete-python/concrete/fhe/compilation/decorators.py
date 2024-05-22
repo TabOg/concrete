@@ -179,7 +179,8 @@ def module():
         if not functions:
             error = "Tried to define an @fhe.module without any @fhe.function"
             raise RuntimeError(error)
-        composition = getattr(class_, "composition", CompositionPolicy(NotComposable()))
+        composition = getattr(class_, "composition", NotComposable())
+        assert(isinstance(composition, CompositionPolicy))
         return ModuleCompiler([f for (_, f) in functions], composition)
 
     return decoration

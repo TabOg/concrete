@@ -12,6 +12,7 @@ use crate::optimization::dag::multi_parameters::partitions::{
 use crate::optimization::dag::multi_parameters::symbolic_variance::SymbolicVariance;
 use crate::optimization::dag::solo_key::analyze::safe_noise_bound;
 use crate::optimization::{Err, Result};
+use crate::utils::viz::vizp;
 
 use super::complexity::OperationsCount;
 use super::keys_spec;
@@ -437,6 +438,7 @@ pub fn analyze(
     let partitions = partitionning_with_preferred(&dag, &p_cut, default_partition);
     let partitioned_dag = PartitionedDag { dag, partitions };
     let varianced_dag = VariancedDag::try_from_partitioned(partitioned_dag)?;
+    vizp!(&varianced_dag);
     let variance_constraints = collect_all_variance_constraints(&varianced_dag, noise_config);
     let undominated_variance_constraints =
         VarianceConstraint::remove_dominated(&variance_constraints);

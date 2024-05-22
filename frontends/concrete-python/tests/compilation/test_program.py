@@ -447,7 +447,7 @@ def test_composition_policy_default():
             return x * y
 
     assert(isinstance(Module.composition, fhe.CompositionPolicy))
-    assert(isinstance(Module.composition.policy, fhe.NotComposable))
+    assert(isinstance(Module.composition, fhe.NotComposable))
 
 def test_composition_policy_all_composable():
 
@@ -465,10 +465,10 @@ def test_composition_policy_all_composable():
         def mul(x, y):
             return x * y
 
-        composition = fhe.CompositionPolicy(fhe.ModuleComposable())
+        composition = fhe.ModuleComposable()
 
     assert(isinstance(Module.composition, fhe.CompositionPolicy))
-    assert(isinstance(Module.composition.policy, fhe.ModuleComposable))
+    assert(isinstance(Module.composition, fhe.ModuleComposable))
 
 
 def test_composition_policy_wires():
@@ -484,10 +484,33 @@ def test_composition_policy_wires():
         def add_sub(x, y):
             return (x + y), (x - y)
 
-        composition = CompositionPolicy(Wired([
+        composition = Wired([
             Wire(AllOutputs(add_sub), AllInputs(add_sub)),
             Wire(AllOutputs(add_sub), Input(square, 0))
-        ]))
+        ])
 
     assert(isinstance(Module.composition, fhe.CompositionPolicy))
-    assert(isinstance(Module.composition.policy, fhe.Wired))
+    assert(isinstance(Module.composition, fhe.Wired))
+
+
+def test_composition_wow():
+    from concrete.fhe import CompositionPolicy, Wired, Wire, Input, Output, AllInputs, AllOutputs
+
+    @fhe.module()
+    class Module:
+        @fhe.function({"x": "encrypted"})
+        def square(x):
+            return x**2
+
+        @fhe.function({"x": "encrypted", "y": "encrypted"})
+        def add_sub(x, y):
+            return (x + y), (x - y)
+
+        composition = Wired([
+            Wire(AllOutputs(add_sub), AllInputs(add_sub)),
+            Wire(AllOutputs(add_sub), Input(square, 0))
+        ])
+
+    module = Module.compile(
+        {"square": [np.random.randint(1, 20, size=()) for _ in range(100)], "add_sub": [(np.random.randint(1, 20, size=()), np.random.randint(1, 20, size=())) for _ in range(100)]},
+    )
