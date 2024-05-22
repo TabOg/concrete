@@ -836,9 +836,9 @@ class Converter:
         num_cts = tfhers_int.shape[-1]
         # first table maps to the lsb, and last one maps to the msb
         tables = [
-            # the base table consider the message bits only, but we repeat it to take into account
-            # the padding bits without considering their values
-            [value << (msg_width * i) for value in range(2**msg_width)] * 2**carry_width
+            # we consider carry bits for all ciphertexts.
+            # This means that overflow can happen, and it's undefined behavior
+            [value << (msg_width * i) for value in range(2 ** (msg_width + carry_width))]
             for i in range(num_cts)
         ]
         # ciphertexts are oganized msb first, and tables are lsb first
@@ -869,26 +869,27 @@ class Converter:
         # number of ciphertexts representing a single integer
         num_cts = input_bit_width // msg_width
 
-        # adds a dimension of ciphertexts
+        # adds a dimension of ciphertexts for the result
         result_shape = native_int.shape + (num_cts,)
         result_type = ctx.tensor(ctx.eint(msg_width + carry_width), result_shape)
 
-        # duplicate tensor over new dimension (ciphertext dimension)
+        # we reshape so that we can concatenate later over the last dim (ciphertext dim)
         reshaped_native_int = ctx.reshape(native_int, native_int.shape + (1,))
-        interm_type = ctx.tensor(ctx.eint(input_bit_width), result_shape)
-        extended_native_int = ctx.concatenate(
-            interm_type, [reshaped_native_int for _ in range(num_cts)], axis=-1
-        )
 
-        # tables are supposed to extract bits at different offsets.
-        # it breaks a ciphertext of native_bit_width bits to n_elem
-        # cipheretext of msg_width + carry_width bits
-        tables = [
-            [i for i in range(2**msg_width) for _ in range(2**repeat_pow)]
-            * 2 ** (input_bit_width - repeat_pow - msg_width)
-            for repeat_pow in range(0, input_bit_width, msg_width)
+        # we want to extract `msg_width` bits at a time, and store them
+        # in a `msg_width + carry_width` bits eint
+        bits_shape = ctx.tensor(ctx.eint(msg_width + carry_width), reshaped_native_int.shape)
+        # we extract lsb first
+        extracted_bits = [
+            ctx.extract_bits(
+                bits_shape,
+                reshaped_native_int,
+                bits=slice(i * msg_width, (i + 1) * msg_width, 1),
+            )
+            for i in range(num_cts)
         ]
-        mapping = np.broadcast_to(np.array(list(reversed(range(num_cts)))), result_shape)
-        return ctx.multi_tlu(result_type, extended_native_int, tables, mapping)
+
+        # we are extracting lsb first so we reverse it so we have msb first
+        return ctx.concatenate(result_type, extracted_bits[::-1], axis=-1)
 
     # pylint: enable=missing-function-docstring,unused-argument
