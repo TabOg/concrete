@@ -1,9 +1,10 @@
 # Bit Extraction
 This document explains bit extraction, a feature of **Concrete** library for manipulating individual bits within encrypted integers.
 
+## Introduction
 Bit extraction allows you to extract a slice of bits from an integer. This operation is useful for applications that require to directly manipulate bits of integers.
 
-**Concrete**'s `fhe.bits(value)` function takes an encrypted integer x as input and returns a list representing the individual bits of x. Index 0 corresponds to the least significant bit of x. The cost of this operation increase as the index goes higher. 
+**Concrete**'s `fhe.bits(x)` function takes an encrypted integer `x` as input and returns a list representing the individual bits of x. Index 0 corresponds to the least significant bit of x. The cost of this operation increase as the index goes higher. 
 
 {% hint style="warning" %}
 Bit extraction only works in the `Native` encoding, which is typically used when all table lookups in the circuit are less than or equal to 8 bits.

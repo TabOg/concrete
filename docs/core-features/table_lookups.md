@@ -1,6 +1,7 @@
 # Table lookups
 This document explains the use of table lookups (TLUs) in Concrete, covering creation, exactness, and performance, and the configuration options to manage error probabilities and improve efficiency.
 
+## Introduction
 Table lookups (TLUs) are one of the most common operations in **Concrete**. Most operations are converted to TLUs under the hood, except:
 - Addition
 - Subtraction
